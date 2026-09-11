@@ -24,10 +24,10 @@ export class DevUsersSeedService implements OnModuleInit {
       this.config.get<string>('SEED_DEV_USERS', 'true') === 'true';
     if (!enabled) return;
 
-    if (this.config.get<string>('NODE_ENV') === 'production') {
-      this.logger.warn('SEED_DEV_USERS ignorado en production');
-      return;
-    }
+    // if (this.config.get<string>('NODE_ENV') === 'production') {
+    //   this.logger.warn('SEED_DEV_USERS ignorado en production');
+    //   return;
+    // }
 
     const adminEmail = (
       this.config.get<string>('DEV_ADMIN_EMAIL') ?? 'admin@scoutly.dev'
