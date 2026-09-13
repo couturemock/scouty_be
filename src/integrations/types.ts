@@ -25,7 +25,7 @@ export interface CommercialSignal {
 }
 
 export interface SupplierOffer {
-  source: 'alibaba' | '1688';
+  source: 'alibaba' | '1688' | 'aliexpress';
   name: string;
   listingUrl: string;
   unitPriceEur?: number;

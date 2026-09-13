@@ -11,7 +11,7 @@ import { CatalogService } from '../catalog/catalog.service';
 import { CreativeIntelligenceService } from '../creative/creative-intelligence.service';
 import { currentWeekKey, previousWeekKey } from '../common/week';
 import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
-import { AlibabaSupplierProvider } from '../integrations/suppliers/alibaba.provider';
+import { SuppliersService } from '../integrations/suppliers/suppliers.service';
 import { CommercialSignal, SupplierOffer } from '../integrations/types';
 import { RankingEntry } from '../rankings/ranking-entry.entity';
 import { ProductSnapshot } from '../snapshots/product-snapshot.entity';
@@ -30,7 +30,7 @@ export class ProductsService {
     @InjectRepository(RankingEntry)
     private readonly rankings: Repository<RankingEntry>,
     private readonly amazon: KeepaAmazonProvider,
-    private readonly suppliers: AlibabaSupplierProvider,
+    private readonly suppliers: SuppliersService,
     @Inject(forwardRef(() => CatalogService))
     private readonly catalog: CatalogService,
     @Inject(forwardRef(() => CreativeIntelligenceService))
@@ -146,12 +146,34 @@ export class ProductsService {
       }
 
       const salePrice = signal.price ?? 0;
-      const supplierOffers = await this.suppliers.findRelated(
-        signal.title,
-        5,
-        salePrice,
+      let supplierOffers: SupplierOffer[] = [];
+      try {
+        supplierOffers = await this.suppliers.findRelated(
+          signal.title,
+          6,
+          salePrice,
+          signal.country,
+          signal.imageUrl,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `Suppliers skip "${signal.title.slice(0, 40)}": ${err}`,
+        );
+      }
+      const live = supplierOffers.find(
+        (s) => s.kind === 'live' && s.unitPriceEur != null,
       );
-      const profitability = this.computeProfitability(salePrice, supplierOffers[0]);
+      const profitability = live
+        ? this.computeProfitability(salePrice, live)
+        : {
+            salePrice,
+            supplierCost: null as number | null,
+            shipping: null as number | null,
+            fees: salePrice > 0 ? Number((salePrice * 0.15).toFixed(2)) : null,
+            estimatedProfit: null as number | null,
+            marginPct: null as number | null,
+            available: false,
+          };
 
       product.slug = slug;
       product.title = signal.title;
@@ -176,8 +198,12 @@ export class ProductsService {
       product.reviewCount = signal.reviewCount ?? null;
       product.amazonUrl = signal.amazonUrl ?? null;
       product.description = signal.description ?? null;
-      product.estimatedMarginPct = String(profitability.marginPct);
-      product.estimatedProfit = String(profitability.estimatedProfit);
+      product.estimatedMarginPct =
+        profitability.marginPct != null ? String(profitability.marginPct) : null;
+      product.estimatedProfit =
+        profitability.estimatedProfit != null
+          ? String(profitability.estimatedProfit)
+          : null;
       product.meta = {
         ...(product.meta ?? {}),
         keepa: signal.raw ?? {},
@@ -218,6 +244,9 @@ export class ProductsService {
         rating: signal.rating,
         reviewCount: signal.reviewCount,
         raw: signal.raw,
+        // AliExpress (RapidAPI) + Alibaba/1688 links captured at ingest time
+        suppliers: supplierOffers,
+        profitability,
       };
       await this.snapshots.save(snapshot);
       saved.push(product);
@@ -233,6 +262,7 @@ export class ProductsService {
     options?: { productsPerCategory?: number; ciTopN?: number },
   ) {
     const weekKey = currentWeekKey();
+    this.suppliers.beginIngestRun();
     this.logger.log(
       `Ingesta Keepa week=${weekKey} markets=${markets?.join(',') ?? 'default'} perCat=${options?.productsPerCategory ?? 'env'}`,
     );
@@ -474,15 +504,28 @@ export class ProductsService {
   }
 
   async getProductDetail(idOrSlug: string, view: CatalogView = 'published') {
-    const weekKey = await this.resolveWeekKey(view);
     const product =
       (await this.products.findOne({ where: { id: idOrSlug } })) ??
       (await this.products.findOne({ where: { slug: idOrSlug } })) ??
       (await this.products.findOne({ where: { amazonAsin: idOrSlug } }));
 
-    if (!product || product.catalogWeekKey !== weekKey) {
-      throw new NotFoundException('Producto no encontrado en el catálogo activo');
+    if (!product) {
+      throw new NotFoundException('Producto no encontrado');
     }
+
+    // Direct ID (e.g. from URL analysis) can be outside the published week.
+    // Slug/ASIN lookups stay scoped to the active catalog.
+    const byDirectId = product.id === idOrSlug;
+    if (!byDirectId) {
+      const weekKey = await this.resolveWeekKey(view);
+      if (product.catalogWeekKey !== weekKey) {
+        throw new NotFoundException(
+          'Producto no encontrado en el catálogo activo',
+        );
+      }
+    }
+
+    const weekKey = product.catalogWeekKey;
 
     const history = await this.snapshots.find({
       where: { productId: product.id },
@@ -491,32 +534,56 @@ export class ProductsService {
 
     const salePrice = Number(product.currentPrice ?? 0);
     const cached = (product.meta?.suppliers as SupplierOffer[] | undefined) ?? [];
-    const needsRefresh =
-      !cached.length ||
-      cached.some(
-        (s) =>
-          s.kind === 'estimated' ||
-          s.listingUrl?.includes('1688.com/search/-') ||
-          (salePrice > 50 && (s.unitPriceEur ?? 0) < salePrice * 0.1),
-      );
 
-    const supplierOffers = needsRefresh
-      ? await this.suppliers.findRelated(product.title, 5, salePrice)
-      : cached;
+    // Never invent live supplier prices. Keep search shortcuts without fake unit costs
+    // unless we already have kind=live offers.
+    const liveOffers = cached.filter((s) => s.kind === 'live');
+    const supplierOffers =
+      liveOffers.length > 0
+        ? liveOffers
+        : cached
+            .filter((s) => s.listingUrl)
+            .map((s) => ({
+              ...s,
+              unitPriceEur: undefined,
+              shippingEstimateEur: undefined,
+              kind: 'estimated' as const,
+              note:
+                s.note ??
+                'Sin API de proveedores: solo enlace de búsqueda, sin precio real.',
+            }));
 
-    const profitability = this.computeProfitability(salePrice, supplierOffers[0]);
-
-    // Refresh absurd / broken fixture data so UI is honest without re-ingest
-    if (needsRefresh) {
-      product.meta = {
-        ...(product.meta ?? {}),
-        suppliers: supplierOffers,
-        profitability,
-      };
-      product.estimatedMarginPct = String(profitability.marginPct);
-      product.estimatedProfit = String(profitability.estimatedProfit);
-      await this.products.save(product);
-    }
+    const cheapestLive = [...liveOffers]
+      .filter((s) => s.unitPriceEur != null)
+      .sort(
+        (a, b) => (a.unitPriceEur ?? Infinity) - (b.unitPriceEur ?? Infinity),
+      )[0];
+    const hasLiveCost = Boolean(cheapestLive);
+    const profitability = hasLiveCost
+      ? {
+          ...this.computeProfitability(salePrice, cheapestLive),
+          formula:
+            'Beneficio estimado = PVP Amazon − coste proveedor − envío − comisiones Amazon (~15%)',
+          basis: 'Coste de proveedor según oferta enlazada (API).',
+          available: true as const,
+        }
+      : {
+          salePrice,
+          supplierCost: null,
+          shipping: null,
+          fees: salePrice > 0 ? Number((salePrice * 0.15).toFixed(2)) : null,
+          estimatedProfit: null,
+          marginPct: null,
+          formula:
+            'Beneficio = PVP − coste proveedor − envío − comisiones (~15%)',
+          basis:
+            'Margen no disponible: no hay precio real de proveedor (API 1688/Alibaba no conectada).',
+          available: false as const,
+          labels: {
+            estimatedProfit: 'Beneficio estimado',
+            marginPct: 'Margen estimado',
+          },
+        };
 
     return {
       weekKey,
@@ -535,19 +602,7 @@ export class ProductsService {
         growthPct: h.growthPct != null ? Number(h.growthPct) : null,
         signals: h.signals,
       })),
-      profitability: {
-        formula:
-          'Beneficio estimado = PVP Amazon − coste proveedor − envío − comisiones Amazon (~15%)',
-        basis:
-          supplierOffers[0]?.kind === 'estimated'
-            ? 'El coste de proveedor es una estimación Scout-ly (aún no hay API 1688/Alibaba). Se escala al PVP; en marcas (Apple, etc.) asume coste alto.'
-            : 'Coste de proveedor según oferta enlazada.',
-        ...profitability,
-        labels: {
-          estimatedProfit: 'Beneficio estimado',
-          marginPct: 'Margen estimado',
-        },
-      },
+      profitability,
       suppliers: supplierOffers,
       creativeIntelligence: this.creativeIntelligence.forProductDetail(product),
     };

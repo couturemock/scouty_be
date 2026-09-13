@@ -39,15 +39,47 @@ export class CreativeIntelligenceService {
     return 'Anuncios similares ordenados por vistas e interacciones públicas (PipiAds). No son CTR, CPA ni ROAS de Meta o TikTok Ads Manager.';
   }
 
+  /** Prefer CDN creative when an older snapshot only stored a library search URL. */
+  repairAdLinks(ads: CreativeAd[]): CreativeAd[] {
+    return ads.map((ad) => {
+      const signals = { ...(ad.publicSignals ?? {}) };
+      const media = String(signals.mediaUrl ?? signals.videoUrl ?? '').trim();
+      const src = String(ad.sourceUrl ?? '').trim();
+      const isSearch =
+        signals.linkKind === 'search' ||
+        (src.includes('ads/library') &&
+          src.includes('q=') &&
+          !src.includes('id=')) ||
+        (src.includes('library.tiktok.com') && !src.includes('/ads/detail'));
+
+      if (media && /^https?:\/\//i.test(media) && (!src || isSearch)) {
+        return {
+          ...ad,
+          sourceUrl: media,
+          publicSignals: { ...signals, linkKind: 'ad', mediaUrl: media },
+        };
+      }
+      if (src.includes('pipiads.com') && /\.(mp4|m3u8|webm)(\?|$)/i.test(src)) {
+        return {
+          ...ad,
+          publicSignals: { ...signals, linkKind: 'ad', mediaUrl: src },
+        };
+      }
+      return ad;
+    });
+  }
+
   private withRanking(ads: CreativeAd[]) {
-    const ranked = sortAdsByEngagement(ads);
+    const ranked = sortAdsByEngagement(this.repairAdLinks(ads));
     return {
       ads: ranked,
       winningFormats: summarizeWinningFormats(ranked),
     };
   }
 
-  getStored(product: Product): StoredCreativeIntelligence | null {
+  getStored(product: {
+    meta?: Record<string, unknown> | null;
+  }): StoredCreativeIntelligence | null {
     const stored = product.meta?.creativeIntelligence as
       | StoredCreativeIntelligence
       | undefined;
@@ -147,11 +179,18 @@ export class CreativeIntelligenceService {
     user: User,
     productTitle: string,
     productId?: string,
+    country?: string,
   ) {
     let product: Product | null = null;
     if (productId) {
       product = await this.products.findOne({ where: { id: productId } });
     }
+
+    const market =
+      country?.trim().toUpperCase() ||
+      product?.country ||
+      user.targetMarket ||
+      'ES';
 
     const cached = product ? this.getStored(product) : null;
     if (cached) {
@@ -171,7 +210,7 @@ export class CreativeIntelligenceService {
     const { ads, provider, creditsUsed } = await this.ads.fetchAds(
       productTitle,
       8,
-      user.targetMarket,
+      market,
     );
     const ranked = this.withRanking(ads);
 
@@ -230,14 +269,27 @@ export class CreativeIntelligenceService {
   forProductDetail(product: Product) {
     const stored = this.getStored(product);
     if (stored) {
+      const ads =
+        stored.provider === 'fixture'
+          ? []
+          : stored.ads.filter((ad) => {
+              const kind = String(ad.publicSignals?.linkKind ?? '');
+              const plays = Number(ad.publicSignals?.playCount ?? 0);
+              if (kind === 'search' && !(plays > 0)) return false;
+              return true;
+            });
       return {
-        ads: stored.ads,
-        winningFormats: stored.winningFormats ?? [],
-        paused: false,
+        ads,
+        winningFormats: ads.length ? stored.winningFormats ?? [] : [],
+        paused: ads.length === 0,
         provider: stored.provider,
         fetchedAt: stored.fetchedAt,
         fromSnapshot: stored.fromSnapshot,
         disclaimer: stored.disclaimer,
+        message:
+          ads.length === 0
+            ? 'Sin anuncios reales de PipiAds para este producto.'
+            : undefined,
       };
     }
     return {

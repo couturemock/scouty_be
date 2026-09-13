@@ -6,7 +6,7 @@
 export type CreativePlatform = 'tiktok' | 'facebook' | 'instagram'
 
 const DAY_MS = 86_400_000
-const TIKTOK_LIBRARY_WINDOW_DAYS = 90
+const TIKTOK_LIBRARY_WINDOW_DAYS = 180
 
 export function isUselessCreativeUrl(url: string | null | undefined): boolean {
   if (!url?.trim()) return true
@@ -28,12 +28,24 @@ export function isUselessCreativeUrl(url: string | null | undefined): boolean {
       return !hasAd
     }
 
-    // CDN / mp4 alone is media, not a viewable ad page
-    if (/\.(mp4|m3u8|webm)(\?|$)/i.test(u.pathname)) return true
+    // PipiAds CDN videos ARE the creative — open them. Other bare mp4s are not a page.
+    if (/\.(mp4|m3u8|webm)(\?|$)/i.test(u.pathname)) {
+      if (host.includes('pipiads.com') || host.includes('pipispy.com')) return false
+      return true
+    }
     return false
   } catch {
     return true
   }
+}
+
+export function librarySearchTerm(title: string): string {
+  const words = title
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 1)
+    .slice(0, 3)
+  return (words.join(' ') || title).slice(0, 60).trim()
 }
 
 export function metaAdLibrarySearchUrl(term: string, country = 'ES'): string {
@@ -67,18 +79,34 @@ export function tiktokLibraryRegion(country = 'ES'): string {
   return c || 'ES'
 }
 
+function tiktokRegionForTerm(term: string, country: string): string {
+  const brandy =
+    /\b(macbook|iphone|ipad|airpods|samsung|sony|nike|adidas|apple|laptop|microsoft|surface|dyson|lego)\b/i.test(
+      term,
+    )
+  if (brandy) return 'all'
+  return tiktokLibraryRegion(country)
+}
+
 /**
  * TikTok Commercial Content Library — verified deep link.
+ * Prefills filters; TikTok still requires clicking Search (SPA does not auto-query).
  * Do not use tiktok.com/search (frequently errors with "Something went wrong").
  */
 export function tiktokAdLibrarySearchUrl(term: string, country = 'ES'): string {
-  const now = Math.floor(Date.now() / DAY_MS) * DAY_MS
+  const now = Date.now()
+  const start =
+    Math.floor((now - TIKTOK_LIBRARY_WINDOW_DAYS * DAY_MS) / DAY_MS) * DAY_MS
+  const end = Math.floor(now / DAY_MS) * DAY_MS + DAY_MS - 1
   const p = new URLSearchParams({
-    region: tiktokLibraryRegion(country),
+    region: tiktokRegionForTerm(term, country),
     adv_name: term.replace(/\s+/g, ' ').trim().slice(0, 80),
     query_type: '1',
-    start_time: String(now - TIKTOK_LIBRARY_WINDOW_DAYS * DAY_MS),
-    end_time: String(now),
+    start_time: String(start),
+    end_time: String(end),
+    sort_type: 'create_time,desc',
+    ad_type: '0',
+    ad_status: '1',
   })
   return `https://library.tiktok.com/ads?${p.toString()}`
 }
@@ -119,15 +147,21 @@ export function resolveCreativeSourceUrl(opts: {
     pickString(raw, [
       'share_url',
       'shareUrl',
+      'url',
       'ad_url',
       'adUrl',
       'source_url',
       'sourceUrl',
-      'url',
+      'tiktok_author_url',
+      'tiktokAuthorUrl',
       'landing_page',
       'landingPage',
+      'app_url',
+      'appUrl',
       'page_url',
       'pageUrl',
+      'video_url',
+      'videoUrl',
     ]),
   ].filter(Boolean) as string[]
 
@@ -151,7 +185,7 @@ export function resolveCreativeSourceUrl(opts: {
     return { url: metaAdLibraryAdUrl(archiveId, 'ALL'), kind: 'ad' }
   }
 
-  const videoId = pickString(raw, ['aweme_id', 'awemeId', 'tiktok_id', 'video_id', 'videoId'])
+  const videoId = pickString(raw, ['aweme_id', 'awemeId', 'tiktok_id'])
   if (opts.platform === 'tiktok' && videoId && /^\d{8,}$/.test(videoId)) {
     return {
       url: `https://www.tiktok.com/video/${videoId}`,
@@ -159,17 +193,22 @@ export function resolveCreativeSourceUrl(opts: {
     }
   }
 
-  const term =
-    opts.productTitle
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .slice(0, 4)
-      .join(' ') || opts.productTitle.slice(0, 40)
-
-  if (opts.platform === 'tiktok') {
-    return { url: tiktokAdLibrarySearchUrl(term, country), kind: 'search' }
+  // PipiAds list often only has CDN video_url (hex video_id ≠ TikTok aweme id).
+  const mediaUrl = pickString(raw, ['video_url', 'videoUrl'])
+  if (mediaUrl && !isUselessCreativeUrl(mediaUrl)) {
+    return { url: mediaUrl, kind: 'ad' }
   }
+
+  const authorUrl = pickString(raw, [
+    'tiktok_author_url',
+    'tiktokAuthorUrl',
+    'author_url',
+  ])
+  if (authorUrl && !isUselessCreativeUrl(authorUrl)) {
+    return { url: authorUrl, kind: 'profile' }
+  }
+
+  const term = librarySearchTerm(opts.productTitle)
 
   return { url: metaAdLibrarySearchUrl(term, country), kind: 'search' }
 }

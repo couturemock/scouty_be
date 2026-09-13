@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { sortAdsByEngagement } from '../ads/ad-engagement';
+import {
+  filterAdsByRelevance,
+  productQueryTokens,
+  sortAdsByEngagement,
+} from '../ads/ad-engagement';
 import { resolveCreativeSourceUrl } from '../ads/creative-source-url';
 import { CreativeAd } from '../types';
 import { PipiAdsClient } from './pipiads.client';
@@ -65,13 +69,38 @@ export class PipiAdsProvider {
   }
 
   private keywordFromTitle(title: string) {
+    const tokens = productQueryTokens(title).slice(0, 6);
+    if (tokens.length) return tokens.join(' ').slice(0, 80);
     return title
       .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .split(/\s+/)
-      .filter((w) => w.length > 2)
-      .slice(0, 6)
+      .filter(Boolean)
+      .slice(0, 4)
       .join(' ')
       .slice(0, 80);
+  }
+
+  /** PipiAds legacy keyword payload. Do not add unknown fields — API returns 400/empty. */
+  private extendKeywords(keyword: string) {
+    const phrase = keyword.trim().slice(0, 80);
+    return [{ type: 1, keyword: phrase }];
+  }
+
+  private rawHaystack(raw: RawAd) {
+    return [
+      raw.desc,
+      raw.ad_copy,
+      raw.title,
+      raw.product_name,
+      raw.goods_name,
+      raw.brand_name,
+      raw.advertiser_name,
+      raw.landing_page,
+      raw.ad_url,
+      raw.share_url,
+    ]
+      .map((v) => String(v ?? ''))
+      .join(' ');
   }
 
   private platformFromRaw(raw: RawAd): CreativeAd['platform'] {
@@ -140,9 +169,11 @@ export class PipiAdsProvider {
       country,
       raw,
       candidates: [
-        String(raw.share_url ?? ''),
-        String(raw.ad_url ?? ''),
         String(raw.url ?? ''),
+        String(raw.share_url ?? ''),
+        String(raw.tiktok_author_url ?? ''),
+        String(raw.app_url ?? ''),
+        String(raw.ad_url ?? ''),
         String(raw.landing_page ?? ''),
         String(raw.video_url ?? ''),
       ],
@@ -158,11 +189,12 @@ export class PipiAdsProvider {
         label: 'Señales públicas PipiAds (sin CTR/CPA/ROAS reales)',
         linkKind: resolved.kind,
         videoId: raw.video_id ?? raw.id,
+        mediaUrl: raw.video_url || undefined,
         playCount: raw.play_count ?? raw.ad_play_count,
         likeCount: raw.digg_count ?? raw.like_count,
-        deliveryDays: raw.put_day ?? raw.delivery_days,
+        deliveryDays: raw.put_day ?? raw.put_days ?? raw.delivery_days,
         adSpendUsd: raw.ad_cost ?? raw.cost,
-        region: raw.region,
+        region: raw.region ?? raw.fetch_region,
       },
       aiAnalysis: this.analyzeAd(raw, fallbackTitle),
     };
@@ -195,35 +227,31 @@ export class PipiAdsProvider {
       5,
     );
     const region = this.regionForCountry(country);
-    const perPlatform = Math.max(4, Math.ceil(searchSize / 2));
+    // Over-fetch then relevance-filter: PipiAds sometimes ignores keywords and
+    // returns viral ads sorted by plays (Shopify/Canva/etc.).
+    const perPlatform = Math.min(20, Math.max(8, Math.ceil(searchSize)));
+    const keywords = this.extendKeywords(keyword);
 
-    // Always query TikTok and Meta separately so we don't end up with only one network.
+    const listParams = (plat_type: 1 | 2) => ({
+      current_page: 1,
+      page_size: perPlatform,
+      plat_type,
+      extend_keywords: keywords,
+      region,
+      sort: 4,
+      sort_type: 'desc',
+    });
+
     const [tiktokRaw, metaRaw] = await Promise.all([
       this.client
-        .call<unknown>('/v3/api/open/adspy/list', {
-          current_page: 1,
-          page_size: perPlatform,
-          plat_type: 1,
-          extend_keywords: [{ type: 1, keyword }],
-          region,
-          sort: 4,
-          sort_type: 'desc',
-        })
+        .call<unknown>('/v3/api/open/adspy/list', listParams(1))
         .then((data) => this.extractList(data))
         .catch((err) => {
           this.logger.warn(`PipiAds TikTok search: ${err}`);
           return [] as RawAd[];
         }),
       this.client
-        .call<unknown>('/v3/api/open/adspy/list', {
-          current_page: 1,
-          page_size: perPlatform,
-          plat_type: 2,
-          extend_keywords: [{ type: 1, keyword }],
-          region,
-          sort: 4,
-          sort_type: 'desc',
-        })
+        .call<unknown>('/v3/api/open/adspy/list', listParams(2))
         .then((data) => this.extractList(data))
         .catch((err) => {
           this.logger.warn(`PipiAds Meta search: ${err}`);
@@ -235,10 +263,17 @@ export class PipiAdsProvider {
       Math.min(tiktokRaw.length, perPlatform) +
       Math.min(metaRaw.length, perPlatform);
 
-    // Map everything we got, then rank by views/likes in Scout-ly (not only remote sort).
-    const mapped = [...tiktokRaw, ...metaRaw].map((r) =>
-      this.mapAd(r, productTitle, country),
-    );
+    const mapped = [...tiktokRaw, ...metaRaw]
+      .filter((raw) => {
+        // Keep ads that mention at least one significant product token.
+        const hay = this.rawHaystack(raw);
+        const tokens = productQueryTokens(keyword);
+        if (!tokens.length) return true;
+        const lower = hay.toLowerCase();
+        return tokens.some((t) => lower.includes(t));
+      })
+      .map((r) => this.mapAd(r, productTitle, country));
+
     const seen = new Set<string>();
     const unique: CreativeAd[] = [];
     for (const ad of mapped) {
@@ -251,7 +286,14 @@ export class PipiAdsProvider {
       unique.push(ad);
     }
 
-    const ads = sortAdsByEngagement(unique).slice(0, limit);
+    const relevant = filterAdsByRelevance(unique, productTitle);
+    if (unique.length && !relevant.length) {
+      this.logger.warn(
+        `PipiAds: ${unique.length} ads for "${productTitle}" discarded as irrelevant (keyword="${keyword}")`,
+      );
+    }
+
+    const ads = sortAdsByEngagement(relevant).slice(0, limit);
     if (creditsUsed === 0) creditsUsed = ads.length;
 
     if (detailCount > 0) {

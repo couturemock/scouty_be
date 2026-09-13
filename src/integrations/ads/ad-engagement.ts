@@ -1,5 +1,68 @@
 import { CreativeAd } from '../types';
 
+/** Noise words that should not count as product match signals. */
+const RELEVANCE_STOP = new Set([
+  'the',
+  'and',
+  'for',
+  'with',
+  'from',
+  'this',
+  'that',
+  'new',
+  'pack',
+  'set',
+  'kit',
+  'de',
+  'la',
+  'el',
+  'los',
+  'las',
+  'del',
+  'una',
+  'uno',
+  'para',
+  'con',
+  'por',
+  'que',
+]);
+
+/** Significant tokens from a product query (lowercased). */
+export function productQueryTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !RELEVANCE_STOP.has(w));
+}
+
+/**
+ * How well an ad's public text matches the product query (0–1).
+ * Used to drop viral PipiAds noise when the keyword filter is ignored.
+ */
+export function adRelevanceScore(
+  ad: CreativeAd,
+  query: string,
+  extraHaystack = '',
+): number {
+  const tokens = productQueryTokens(query);
+  if (!tokens.length) return 1;
+  const hay = `${ad.title} ${ad.sourceUrl ?? ''} ${extraHaystack}`.toLowerCase();
+  let hits = 0;
+  for (const t of tokens) {
+    if (hay.includes(t)) hits += 1;
+  }
+  return hits / tokens.length;
+}
+
+export function filterAdsByRelevance(
+  ads: CreativeAd[],
+  query: string,
+  minScore = 0.34,
+): CreativeAd[] {
+  return ads.filter((ad) => adRelevanceScore(ad, query) >= minScore);
+}
+
 export function adPlayCount(ad: CreativeAd): number {
   const n = Number(ad.publicSignals?.playCount ?? 0);
   return Number.isFinite(n) ? n : 0;
