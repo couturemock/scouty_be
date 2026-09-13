@@ -49,7 +49,10 @@ function pickUnitPriceEur(item: OtapiItem, usdToEur: number): number | null {
     price;
 
   const currency = String(
-    one.OriginalCurrencyCode ?? price.OriginalCurrencyCode ?? price.CurrencyName ?? 'USD',
+    one.OriginalCurrencyCode ??
+      price.OriginalCurrencyCode ??
+      price.CurrencyName ??
+      'USD',
   ).toUpperCase();
 
   const original =
@@ -61,7 +64,11 @@ function pickUnitPriceEur(item: OtapiItem, usdToEur: number): number | null {
   if (currency === 'EUR' && original != null && original > 0) {
     return round2(original);
   }
-  if ((currency === 'USD' || currency === '$') && original != null && original > 0) {
+  if (
+    (currency === 'USD' || currency === '$') &&
+    original != null &&
+    original > 0
+  ) {
     return round2(original * usdToEur);
   }
   if (converted != null && converted > 0) {
@@ -80,10 +87,7 @@ function pickTitle(item: OtapiItem): string {
 function pickUrl(item: OtapiItem): string | null {
   const direct = item.ExternalItemUrl ?? item.TaobaoItemUrl ?? item.ItemUrl;
   if (typeof direct === 'string' && direct.startsWith('http')) return direct;
-  const id = String(item.Id ?? '').replace(/^alb-/, '');
-  if (/^\d+$/.test(id)) {
-    return `https://www.alibaba.com/product-detail/_${id}.html`;
-  }
+  // No inventar URLs `_id.html` — Alibaba suele marcarlas "unavailable".
   return null;
 }
 
@@ -99,9 +103,59 @@ function normalizeImageUrl(url?: string | null): string | null {
   }
 }
 
+const TITLE_STOP = new Set([
+  'for',
+  'the',
+  'and',
+  'with',
+  'from',
+  'pcs',
+  'oem',
+  'new',
+  'hot',
+  'sale',
+  'wholesale',
+  'ml',
+  'oz',
+  'set',
+  'pack',
+  'private',
+  'label',
+]);
+
+/** Floor so $0.01–$0.10 packaging junk no entra al margen. */
+function minCrediblePriceEur(salePriceEur?: number): number {
+  if (salePriceEur != null && salePriceEur > 0) {
+    return Math.max(0.45, round2(salePriceEur * 0.04));
+  }
+  return 0.45;
+}
+
+/** Imagen Amazon de un aceite/serum a menudo matchea botellas vacías. */
+function isPackagingMismatch(title: string, keywords: string): boolean {
+  const queryIsPackaging =
+    /\b(bottle|packaging|container|pump|jar|pouch|vial)\b/i.test(keywords);
+  if (queryIsPackaging) return false;
+  return /\b(empty\s+bottle|pump\s+bottle|pet\s+(clear\s+)?plastic|plastic\s+pump|cosmetic\s+packagin|packaging\s+material|flip\s+cap\s+bottle|shampoo\s+conditioner\s+body\s+wash\s+shower\s+gel\s+container)\b/i.test(
+    title,
+  );
+}
+
+function titleLooksRelated(keywords: string, title: string): boolean {
+  const tokens = keywords
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !TITLE_STOP.has(t));
+  if (tokens.length === 0) return true;
+  const hay = title.toLowerCase();
+  const hits = tokens.filter((t) => hay.includes(t));
+  if (tokens.length >= 3) return hits.length >= 2;
+  return hits.length >= 1;
+}
+
 /**
  * Live Alibaba.com prices via RapidAPI Otapi Alibaba (BatchSearchItemsFrame).
- * Prefers ImageUrl; falls back to keyword.
+ * Prefiere imagen+keyword juntos; evita basura barata / packaging / URLs inventadas.
  *
  * Env:
  *   ALIBABA_COM_RAPIDAPI_KEY (falls back to ALIEXPRESS / 1688 key)
@@ -161,28 +215,46 @@ export class AlibabaComSupplierProvider {
 
     const img = normalizeImageUrl(imageUrl);
     const keywords = supplierSearchKeywords(productTitle);
+    if (!img && !keywords) return [];
+
+    const noteBase =
+      'Precio Otapi Alibaba. El listing puede no estar disponible en tu país — verificá MOQ y stock.';
+
+    // Imagen sola matchea packaging; preferir imagen+keyword.
+    if (img && keywords) {
+      const both = await this.search({
+        imageUrl: img,
+        keywords,
+        limit,
+        salePriceEur,
+        matchNote: `${noteBase} Match imagen+keyword.`,
+        logLabel: `img+kw "${keywords}"`,
+      });
+      if (both.length) return both;
+    }
+
+    if (keywords) {
+      const byKw = await this.search({
+        keywords,
+        limit,
+        salePriceEur,
+        matchNote: `${noteBase} Match por keyword.`,
+        logLabel: `kw "${keywords}"`,
+      });
+      if (byKw.length) return byKw;
+    }
 
     if (img) {
-      const byImage = await this.search({
+      return this.search({
         imageUrl: img,
         limit,
         salePriceEur,
-        matchNote:
-          'Precio Alibaba.com (Otapi). Match por imagen Amazon — verificá MOQ/listing.',
+        matchNote: `${noteBase} Match solo imagen — revisá bien el título.`,
         logLabel: `img ${img.slice(-40)}`,
       });
-      if (byImage.length) return byImage;
     }
 
-    if (!keywords) return [];
-    return this.search({
-      keywords,
-      limit,
-      salePriceEur,
-      matchNote:
-        'Precio Alibaba.com (Otapi). Match por keyword — verificá MOQ/listing.',
-      logLabel: `kw "${keywords}"`,
-    });
+    return [];
   }
 
   private async search(opts: {
@@ -205,16 +277,21 @@ export class AlibabaComSupplierProvider {
     const wait = 1100 - (Date.now() - this.lastCallAt);
     if (wait > 0) await sleep(wait);
 
+    const minEur = minCrediblePriceEur(opts.salePriceEur);
+    // Otapi Alibaba prices are typically USD
+    const minUsd = round2(minEur / 0.92);
+
     const params = new URLSearchParams({
       language: 'en',
       framePosition: '0',
-      frameSize: String(Math.min(Math.max(opts.limit * 2, 5), 20)),
-      OrderBy: 'Price:Asc',
+      frameSize: String(Math.min(Math.max(opts.limit * 4, 10), 20)),
+      // Popularity evita el $0.01 basura de Price:Asc
+      OrderBy: 'Popularity:Desc',
+      MinPrice: String(minUsd),
     });
     if (opts.imageUrl) params.set('ImageUrl', opts.imageUrl);
     if (opts.keywords) params.set('ItemTitle', opts.keywords);
     if (opts.salePriceEur != null && opts.salePriceEur > 0) {
-      // Otapi Alibaba prices are typically USD
       params.set('MaxPrice', String(round2(opts.salePriceEur * 1.2)));
     }
 
@@ -262,39 +339,60 @@ export class AlibabaComSupplierProvider {
 
       const list = extractItems(json);
       const usdEur = 0.92;
-      const offers: SupplierOffer[] = [];
+      const keywords = opts.keywords ?? '';
+      type Cand = {
+        listingUrl: string;
+        unit: number;
+        title: string;
+        volume: number;
+      };
+      const cands: Cand[] = [];
       const seen = new Set<string>();
 
       for (const raw of list) {
         const listingUrl = pickUrl(raw);
         const unit = pickUnitPriceEur(raw, usdEur);
-        if (!listingUrl || unit == null || unit <= 0.05) continue;
+        const title = pickTitle(raw);
+        if (!listingUrl || unit == null || unit < minEur) continue;
         if (
           opts.salePriceEur != null &&
           unit >= opts.salePriceEur * 0.9
         ) {
           continue;
         }
+        if (isPackagingMismatch(title, keywords)) continue;
+        if (keywords && !titleLooksRelated(keywords, title)) continue;
         if (seen.has(listingUrl)) continue;
         seen.add(listingUrl);
 
-        offers.push({
-          source: 'alibaba',
-          name: pickTitle(raw),
+        cands.push({
           listingUrl,
-          unitPriceEur: unit,
-          shippingEstimateEur: undefined,
-          leadTimeDays: 18,
-          reliabilityScore: opts.imageUrl ? 78 : 62,
-          region: 'Alibaba.com',
-          kind: 'live',
-          note: opts.matchNote,
+          unit,
+          title,
+          volume: asNumber(raw.Volume) ?? 0,
         });
-        if (offers.length >= opts.limit) break;
       }
 
+      cands.sort((a, b) => {
+        if (b.volume !== a.volume) return b.volume - a.volume;
+        return a.unit - b.unit;
+      });
+
+      const offers: SupplierOffer[] = cands.slice(0, opts.limit).map((c) => ({
+        source: 'alibaba' as const,
+        name: c.title,
+        listingUrl: c.listingUrl,
+        unitPriceEur: c.unit,
+        shippingEstimateEur: undefined,
+        leadTimeDays: 18,
+        reliabilityScore: opts.imageUrl && opts.keywords ? 72 : 58,
+        region: 'Alibaba.com',
+        kind: 'live' as const,
+        note: opts.matchNote,
+      }));
+
       this.logger.log(
-        `Alibaba.com ${opts.logLabel} → ${offers.length} live (from ${list.length} raw) · calls ${this.callsThisRun}/${this.maxCalls()}`,
+        `Alibaba.com ${opts.logLabel} → ${offers.length} live (from ${list.length} raw, ${cands.length} ok) · calls ${this.callsThisRun}/${this.maxCalls()}`,
       );
       return offers;
     } catch (err) {

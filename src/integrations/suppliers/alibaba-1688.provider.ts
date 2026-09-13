@@ -104,6 +104,22 @@ function normalizeImageUrl(url?: string | null): string | null {
   }
 }
 
+function minCrediblePriceEur(salePriceEur?: number): number {
+  if (salePriceEur != null && salePriceEur > 0) {
+    return Math.max(0.35, round2(salePriceEur * 0.03));
+  }
+  return 0.35;
+}
+
+function isPackagingMismatch(title: string, keywords: string): boolean {
+  const queryIsPackaging =
+    /\b(bottle|packaging|container|pump|jar|pouch|vial)\b/i.test(keywords);
+  if (queryIsPackaging) return false;
+  return /\b(empty\s+bottle|pump\s+bottle|pet\s+(clear\s+)?plastic|plastic\s+pump|cosmetic\s+packagin|packaging\s+material)\b/i.test(
+    title,
+  );
+}
+
 /**
  * Live 1688 via RapidAPI Otapi 1688 (BatchSearchItemsFrame).
  * Prefers ImageUrl (Amazon photo) when available; falls back to keyword.
@@ -171,30 +187,46 @@ export class Alibaba1688SupplierProvider {
 
     const img = normalizeImageUrl(imageUrl);
     const keywords = supplierSearchKeywords(productTitle);
+    if (!img && !keywords) return [];
 
-    // 1) Image search (best match) — Otapi accepts ImageUrl alone.
+    // Preferir imagen+keyword: imagen sola a menudo matchea packaging.
+    if (img && keywords) {
+      const both = await this.search({
+        imageUrl: img,
+        keywords,
+        limit,
+        salePriceEur,
+        matchNote:
+          'Precio 1688 (Otapi). Match imagen+keyword — verificá el listing.',
+        logLabel: `img+kw "${keywords}"`,
+      });
+      if (both.length) return both;
+    }
+
+    if (keywords) {
+      const byKw = await this.search({
+        keywords,
+        limit,
+        salePriceEur,
+        matchNote:
+          'Precio 1688 (Otapi). Match por keyword — verificá el listing.',
+        logLabel: `kw "${keywords}"`,
+      });
+      if (byKw.length) return byKw;
+    }
+
     if (img) {
-      const byImage = await this.search({
+      return this.search({
         imageUrl: img,
         limit,
         salePriceEur,
         matchNote:
-          'Precio 1688 (Otapi). Match por imagen Amazon — verificá el listing.',
+          'Precio 1688 (Otapi). Match solo imagen — revisá bien el título.',
         logLabel: `img ${img.slice(-40)}`,
       });
-      if (byImage.length) return byImage;
     }
 
-    // 2) Keyword fallback
-    if (!keywords) return [];
-    return this.search({
-      keywords,
-      limit,
-      salePriceEur,
-      matchNote:
-        'Precio 1688 (Otapi). Match por keyword — verificá el listing.',
-      logLabel: `kw "${keywords}"`,
-    });
+    return [];
   }
 
   private async search(opts: {
@@ -217,11 +249,13 @@ export class Alibaba1688SupplierProvider {
     const wait = 1100 - (Date.now() - this.lastCallAt);
     if (wait > 0) await sleep(wait);
 
+    const minEur = minCrediblePriceEur(opts.salePriceEur);
     const params = new URLSearchParams({
       language: 'en',
       framePosition: '0',
-      frameSize: String(Math.min(Math.max(opts.limit * 2, 5), 20)),
-      OrderBy: 'Price:Asc',
+      frameSize: String(Math.min(Math.max(opts.limit * 4, 10), 20)),
+      OrderBy: 'Popularity:Desc',
+      MinPrice: String(round2(minEur / 0.13)), // ~CNY floor for Otapi
     });
     if (opts.imageUrl) params.set('ImageUrl', opts.imageUrl);
     if (opts.keywords) params.set('ItemTitle', opts.keywords);
@@ -276,30 +310,34 @@ export class Alibaba1688SupplierProvider {
       const list = extractItems(json);
       const cnyEur = this.cnyToEur();
       const usdEur = 0.92;
+      const minEur = minCrediblePriceEur(opts.salePriceEur);
+      const keywords = opts.keywords ?? '';
       const offers: SupplierOffer[] = [];
       const seen = new Set<string>();
 
       for (const raw of list) {
         const listingUrl = pickUrl(raw);
         const unit = pickUnitPriceEur(raw, cnyEur, usdEur);
-        if (!listingUrl || unit == null || unit <= 0.05) continue;
+        const title = pickTitle(raw);
+        if (!listingUrl || unit == null || unit < minEur) continue;
         if (
           opts.salePriceEur != null &&
           unit >= opts.salePriceEur * 0.9
         ) {
           continue;
         }
+        if (isPackagingMismatch(title, keywords)) continue;
         if (seen.has(listingUrl)) continue;
         seen.add(listingUrl);
 
         offers.push({
           source: '1688',
-          name: pickTitle(raw),
+          name: title,
           listingUrl,
           unitPriceEur: unit,
           shippingEstimateEur: undefined,
           leadTimeDays: 14,
-          reliabilityScore: opts.imageUrl ? 80 : 65,
+          reliabilityScore: opts.imageUrl && opts.keywords ? 80 : 65,
           region: '1688 / China',
           kind: 'live',
           note: opts.matchNote,
