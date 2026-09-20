@@ -1,9 +1,15 @@
 import { Module } from '@nestjs/common';
-import { ProductsModule } from '../products/products.module';
-import { WeeklyIngestionJob } from './weekly-ingestion.job';
+import { QueueModule } from '../queue/queue.module';
+import { IngestionQueueService } from './ingestion-queue.service';
 
+/**
+ * Producer-facing only. The web process imports this to enqueue/read
+ * ingestion jobs; the actual processing (IngestionProcessor) is wired up
+ * only in WorkerModule, so the web process never runs an ingestion itself.
+ */
 @Module({
-  imports: [ProductsModule],
-  providers: [WeeklyIngestionJob],
+  imports: [QueueModule],
+  providers: [IngestionQueueService],
+  exports: [IngestionQueueService],
 })
 export class JobsModule {}

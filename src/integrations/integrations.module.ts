@@ -4,7 +4,6 @@ import { CreativeAdsProvider } from './ads/creative-ads.provider';
 import { KeepaAmazonProvider } from './amazon/keepa.provider';
 import { PipiAdsClient } from './pipiads/pipiads.client';
 import { PipiAdsProvider } from './pipiads/pipiads.provider';
-import { Alibaba1688SupplierProvider } from './suppliers/alibaba-1688.provider';
 import { AlibabaComSupplierProvider } from './suppliers/alibaba-com.provider';
 import { AlibabaSupplierProvider } from './suppliers/alibaba.provider';
 import { AliExpressSupplierProvider } from './suppliers/aliexpress.provider';
@@ -18,7 +17,6 @@ import { SuppliersService } from './suppliers/suppliers.service';
     CreativeAdsProvider,
     KeepaAmazonProvider,
     AlibabaSupplierProvider,
-    Alibaba1688SupplierProvider,
     AlibabaComSupplierProvider,
     AliExpressSupplierProvider,
     SuppliersService,
@@ -29,7 +27,6 @@ import { SuppliersService } from './suppliers/suppliers.service';
     CreativeAdsProvider,
     KeepaAmazonProvider,
     AlibabaSupplierProvider,
-    Alibaba1688SupplierProvider,
     AlibabaComSupplierProvider,
     AliExpressSupplierProvider,
     SuppliersService,

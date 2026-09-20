@@ -6,6 +6,8 @@ export interface CommercialSignal {
   title: string;
   imageUrl?: string;
   category: string;
+  /** Keepa browse-node allowlist label(s) this ASIN was pulled from (e.g. Belleza). */
+  ingestCategories?: string[];
   country: string;
   price?: number;
   rank?: number;
@@ -16,6 +18,8 @@ export interface CommercialSignal {
   gmv?: number;
   gmvKind: MetricKind;
   growthPct?: number;
+  growthPct7?: number;
+  growthPct30?: number;
   brand?: string;
   rating?: number;
   reviewCount?: number;
@@ -37,6 +41,9 @@ export interface SupplierOffer {
   /** estimated = fixture / heuristic; live = from real API */
   kind?: 'estimated' | 'live';
   note?: string;
+  /** Orders / sold / Otapi Volume — estimated marketplace activity, never invented. */
+  soldCount?: number;
+  popularity?: number;
 }
 
 export interface CreativeAd {

@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupplierOffer } from '../types';
-import { Alibaba1688SupplierProvider } from './alibaba-1688.provider';
 import { AlibabaComSupplierProvider } from './alibaba-com.provider';
 import { AlibabaSupplierProvider } from './alibaba.provider';
 import { AliExpressSupplierProvider } from './aliexpress.provider';
+import { offerMatchesSeed } from './offer-relevance';
 
 /**
- * Live: AliExpress True API + Otapi 1688 + Otapi Alibaba.com (always all three).
+ * Live: AliExpress True API + Otapi Alibaba.com.
  * Failures / quota → search-link fallbacks. Never throws.
  */
 @Injectable()
@@ -15,7 +15,6 @@ export class SuppliersService {
 
   constructor(
     private readonly aliexpress: AliExpressSupplierProvider,
-    private readonly alibaba1688: Alibaba1688SupplierProvider,
     private readonly alibabaCom: AlibabaComSupplierProvider,
     private readonly links: AlibabaSupplierProvider,
   ) {}
@@ -26,11 +25,6 @@ export class SuppliersService {
         enabled: this.aliexpress.enabled(),
         provider: this.aliexpress.name,
       },
-      alibaba1688: {
-        enabled: this.alibaba1688.enabled(),
-        provider: this.alibaba1688.name,
-        host: 'otapi-1688',
-      },
       alibabaCom: {
         enabled: this.alibabaCom.enabled(),
         provider: this.alibabaCom.name,
@@ -40,7 +34,6 @@ export class SuppliersService {
   }
 
   beginIngestRun() {
-    this.alibaba1688.resetRunBudget();
     this.alibabaCom.resetRunBudget();
   }
 
@@ -52,20 +45,13 @@ export class SuppliersService {
     imageUrl?: string | null,
   ): Promise<SupplierOffer[]> {
     const take = Math.min(Math.max(limit, 1), 9);
-    // Always query each marketplace — don't let AE fill the whole slot list.
-    const perSource = Math.min(3, Math.max(2, Math.ceil(take / 3)));
+    const perSource = Math.min(4, Math.max(2, Math.ceil(take / 2)));
 
-    const [ae, s1688, alb] = await Promise.all([
+    const [aeRaw, albRaw] = await Promise.all([
       this.aliexpress
         .findRelated(productTitle, perSource, salePriceEur, market)
         .catch((err) => {
           this.logger.warn(`AliExpress spike: ${err}`);
-          return [] as SupplierOffer[];
-        }),
-      this.alibaba1688
-        .findRelated(productTitle, perSource, salePriceEur, imageUrl)
-        .catch((err) => {
-          this.logger.warn(`1688 spike: ${err}`);
           return [] as SupplierOffer[];
         }),
       this.alibabaCom
@@ -76,10 +62,26 @@ export class SuppliersService {
         }),
     ]);
 
-    const merged = this.mergeDiverse([ae, s1688, alb], take);
+    // A keyword/image search can return a live-priced item that shares no
+    // real identity with the product (Alibaba's image-only mode in
+    // particular matches generic packaging shapes, not the product itself).
+    // Drop those before they ever reach the UI as a trustworthy live offer.
+    const ae = aeRaw.filter(
+      (o) => o.kind !== 'live' || offerMatchesSeed(o.name, productTitle),
+    );
+    const alb = albRaw.filter(
+      (o) => o.kind !== 'live' || offerMatchesSeed(o.name, productTitle),
+    );
+    const droppedIrrelevant =
+      aeRaw.length - ae.length + (albRaw.length - alb.length);
+
+    const merged = this.mergeDiverse([ae, alb], take);
 
     this.logger.log(
-      `Suppliers "${productTitle.slice(0, 40)}" → AE ${ae.length} · 1688 ${s1688.length} · Alibaba ${alb.length} · merged ${merged.length}`,
+      `Suppliers "${productTitle.slice(0, 40)}" → AE ${ae.length} · Alibaba ${alb.length} · merged ${merged.length}` +
+        (droppedIrrelevant
+          ? ` (${droppedIrrelevant} descartados por baja relevancia)`
+          : ''),
     );
 
     if (merged.length >= take) return merged;
@@ -109,10 +111,7 @@ export class SuppliersService {
     return merged.slice(0, take);
   }
 
-  /**
-   * Round-robin by source so the UI always shows AE + 1688 + Alibaba when available,
-   * instead of 5× AliExpress.
-   */
+  /** Round-robin by source so the UI shows AE + Alibaba when available. */
   private mergeDiverse(buckets: SupplierOffer[][], take: number): SupplierOffer[] {
     const queues = buckets.map((b) =>
       [...b].sort(

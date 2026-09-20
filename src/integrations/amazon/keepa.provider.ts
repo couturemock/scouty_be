@@ -3,8 +3,17 @@ import { ConfigService } from '@nestjs/config';
 import { amazonMarket, AmazonMarket, parseKeepaMarketCodes } from '../../common/amazon-markets';
 import { AmazonProvider, CommercialSignal } from '../types';
 import { FIXTURE_AMAZON_SIGNALS } from '../fixtures/seed-signals';
+import {
+  amazonIngestRejectReason,
+  passesAmazonIngestFilters,
+} from './product-filters';
+import {
+  keepaCategoriesForMarket,
+  keepaCategoryLabels,
+} from './keepa-categories';
+import { bsrImprovementPct, growthFromSalesCsv } from './keepa-growth';
 
-/** Keepa stats.current indices */
+/** Keepa stats.current / csv indices */
 const IDX = {
   AMAZON: 0,
   NEW: 1,
@@ -12,42 +21,6 @@ const IDX = {
   RATING: 16,
   COUNT_REVIEWS: 17,
 } as const;
-
-/** High-signal browse nodes for bestsellers (not leaf-only). */
-const BESTSELLER_CATEGORIES: Record<string, Array<{ id: number; label: string }>> = {
-  US: [
-    { id: 172282, label: 'Electronics' },
-    { id: 1055398, label: 'Home & Kitchen' },
-    { id: 3760911, label: 'Beauty & Personal Care' },
-  ],
-  ES: [
-    { id: 599370031, label: 'Electrónica' },
-    { id: 667049031, label: 'Informática' },
-    { id: 599391031, label: 'Hogar y cocina' },
-    { id: 6198054031, label: 'Belleza' },
-  ],
-  DE: [
-    { id: 562066, label: 'Elektronik & Foto' },
-    { id: 3167641, label: 'Küche, Haushalt & Wohnen' },
-  ],
-  FR: [
-    { id: 13921051, label: 'High-Tech' },
-    { id: 57004031, label: 'Cuisine & Maison' },
-  ],
-  IT: [
-    { id: 412609031, label: 'Elettronica' },
-    { id: 524015031, label: 'Casa e cucina' },
-  ],
-  UK: [
-    { id: 560798, label: 'Electronics & Photo' },
-    { id: 11052591, label: 'Home & Kitchen' },
-  ],
-  MX: [
-    { id: 9482650011, label: 'Electrónicos' },
-    { id: 9482610011, label: 'Hogar y Cocina' },
-    { id: 11260452011, label: 'Belleza' },
-  ],
-};
 
 type KeepaProduct = {
   asin: string;
@@ -58,8 +31,17 @@ type KeepaProduct = {
   monthlySold?: number;
   images?: Array<{ l?: string; m?: string }>;
   categoryTree?: Array<{ catId: number; name: string }>;
-  stats?: { current?: number[] };
+  stats?: {
+    current?: number[];
+    avg?: number[];
+    avg30?: number[];
+    avg90?: number[];
+  };
+  salesRankDrops30?: number;
+  salesRankDrops90?: number;
   rootCategory?: number;
+  /** history=1 — csv[3] is sales rank series */
+  csv?: unknown[];
 };
 
 type KeepaResponse = {
@@ -70,6 +52,25 @@ type KeepaResponse = {
   error?: string | { message?: string };
   refillRate?: number;
   refillIn?: number;
+};
+
+export type KeepaIngestProgress = {
+  market: string;
+  step: string;
+  categoriesDone: number;
+  categoriesTotal: number;
+  callsDone: number;
+  elapsedMs: number;
+  /** null until there's enough data (first category done) to estimate. */
+  etaSeconds: number | null;
+};
+
+type ProgressTracker = {
+  startedAt: number;
+  categoriesDone: number;
+  categoriesTotal: number;
+  callsDone: number;
+  onProgress?: (progress: KeepaIngestProgress) => void;
 };
 
 /**
@@ -186,7 +187,10 @@ export class KeepaAmazonProvider implements AmazonProvider {
 
   async collectWeeklyCandidates(
     countries?: string[],
-    options?: { productsPerCategory?: number },
+    options?: {
+      productsPerCategory?: number;
+      onProgress?: (progress: KeepaIngestProgress) => void;
+    },
   ): Promise<CommercialSignal[]> {
     const marketCodes = this.marketsToIngest(countries);
     const perCategory = this.perCategoryLimit(options?.productsPerCategory);
@@ -198,10 +202,22 @@ export class KeepaAmazonProvider implements AmazonProvider {
         : FIXTURE_AMAZON_SIGNALS;
     }
 
+    const categoriesTotal = marketCodes.reduce(
+      (sum, code) => sum + keepaCategoriesForMarket(code).length,
+      0,
+    );
+    const tracker: ProgressTracker = {
+      startedAt: Date.now(),
+      categoriesDone: 0,
+      categoriesTotal,
+      callsDone: 0,
+      onProgress: options?.onProgress,
+    };
+
     const all: CommercialSignal[] = [];
     for (const code of marketCodes) {
       const market = this.marketFromCode(code);
-      const batch = await this.collectForMarket(market, perCategory);
+      const batch = await this.collectForMarket(market, perCategory, tracker);
       this.logger.log(
         `Keepa ${market.code}: ${batch.length} productos (≤${perCategory}/categoría)`,
       );
@@ -213,14 +229,18 @@ export class KeepaAmazonProvider implements AmazonProvider {
   private async collectForMarket(
     market: AmazonMarket,
     perCategory: number,
+    tracker: ProgressTracker,
   ): Promise<CommercialSignal[]> {
-    const cats =
-      BESTSELLER_CATEGORIES[market.code] ??
-      BESTSELLER_CATEGORIES.ES ??
-      [];
+    const cats = keepaCategoriesForMarket(market.code);
+    if (!cats.length) {
+      this.logger.warn(`Keepa ${market.code}: sin categorías allowlist`);
+    }
     const limit = perCategory;
     const asinSet = new Set<string>();
-    const asinMeta = new Map<string, { rank: number; categoryLabel: string }>();
+    const asinMeta = new Map<
+      string,
+      { rank: number; categoryLabels: string[] }
+    >();
 
     for (const cat of cats) {
       try {
@@ -229,12 +249,16 @@ export class KeepaAmazonProvider implements AmazonProvider {
         );
         const asins = (data.bestSellersList?.asinList ?? []).slice(0, limit);
         asins.forEach((asin, index) => {
-          if (!asinSet.has(asin)) {
+          const prev = asinMeta.get(asin);
+          if (!prev) {
             asinSet.add(asin);
             asinMeta.set(asin, {
               rank: index + 1,
-              categoryLabel: cat.label,
+              categoryLabels: [cat.label],
             });
+          } else if (!prev.categoryLabels.includes(cat.label)) {
+            // Same ASIN in several browse nodes → tops por categoría separados
+            prev.categoryLabels.push(cat.label);
           }
         });
       } catch (error) {
@@ -242,6 +266,9 @@ export class KeepaAmazonProvider implements AmazonProvider {
           `Keepa bestsellers ${market.code}/${cat.label}: ${String(error)}`,
         );
       }
+      tracker.categoriesDone += 1;
+      tracker.callsDone += 1;
+      this.reportProgress(tracker, market.code, cat.label);
     }
 
     const asinList = [...asinSet];
@@ -255,9 +282,13 @@ export class KeepaAmazonProvider implements AmazonProvider {
         const mapped = await this.fetchProducts(chunk, market);
         for (const signal of mapped) {
           const meta = asinMeta.get(signal.externalId);
-          if (meta && signal.rank == null) signal.rank = meta.rank;
-          if (meta && signal.category === 'General') {
-            signal.category = meta.categoryLabel;
+          if (meta) {
+            if (signal.rank == null) signal.rank = meta.rank;
+            signal.ingestCategories = meta.categoryLabels;
+            // Primary display category = first browse allowlist hit
+            if (meta.categoryLabels[0]) {
+              signal.category = meta.categoryLabels[0];
+            }
           }
           products.push(signal);
         }
@@ -266,6 +297,8 @@ export class KeepaAmazonProvider implements AmazonProvider {
           `Keepa product batch ${market.code}: ${String(error)}`,
         );
       }
+      tracker.callsDone += 1;
+      this.reportProgress(tracker, market.code, 'productos');
     }
     return products;
   }
@@ -274,12 +307,48 @@ export class KeepaAmazonProvider implements AmazonProvider {
     asins: string[],
     market: AmazonMarket,
   ): Promise<CommercialSignal[]> {
+    // history=1 + stats=30 → avg30/avg90 + sales rank series for momentum
     const data = await this.keepaGet(
-      `/product?domain=${market.keepaDomain}&asin=${asins.join(',')}&stats=30&rating=1&history=0`,
+      `/product?domain=${market.keepaDomain}&asin=${asins.join(',')}&stats=30&rating=1&history=1`,
     );
     return (data.products ?? [])
       .map((p) => this.mapProduct(p, market))
-      .filter((p): p is CommercialSignal => p != null);
+      .filter((p): p is CommercialSignal => p != null)
+      .filter((signal) => {
+        const reason = amazonIngestRejectReason({
+          title: signal.title,
+          brand: signal.brand,
+          category: signal.category,
+        });
+        if (reason) {
+          this.logger.debug(
+            `Keepa filter skip ${signal.externalId}: ${reason}`,
+          );
+          return false;
+        }
+        return true;
+      });
+  }
+
+  /** % BSR improvement vs 30d average (positive = rising / better rank). */
+  private computeGrowthPct30(product: KeepaProduct): number | undefined {
+    const current = product.stats?.current ?? [];
+    const avg30 = product.stats?.avg30 ?? product.stats?.avg ?? [];
+    const bsrNow = this.positive(current[IDX.SALES]);
+    const bsrAvg30 = this.positive(avg30[IDX.SALES]);
+    if (bsrNow != null && bsrAvg30 != null) {
+      return bsrImprovementPct(bsrAvg30, bsrNow);
+    }
+    const drops = this.positive(product.salesRankDrops30);
+    if (drops != null && drops > 0) {
+      return Number(Math.min(80, Math.log10(drops + 1) * 35).toFixed(1));
+    }
+    return undefined;
+  }
+
+  private computeGrowthPct7(product: KeepaProduct): number | undefined {
+    const salesCsv = product.csv?.[IDX.SALES];
+    return growthFromSalesCsv(salesCsv).growthPct7;
   }
 
   private mapProduct(
@@ -306,6 +375,22 @@ export class KeepaAmazonProvider implements AmazonProvider {
       ? `https://m.media-amazon.com/images/I/${imageId}`
       : undefined;
 
+    const brand = product.brand ?? product.manufacturer ?? undefined;
+    if (
+      !passesAmazonIngestFilters({
+        title: product.title ?? product.asin,
+        brand,
+        category,
+      })
+    ) {
+      return null;
+    }
+
+    const growthPct30 = this.computeGrowthPct30(product);
+    const growthPct7 = this.computeGrowthPct7(product);
+    const growthPct = growthPct7 ?? growthPct30;
+    const avg30 = product.stats?.avg30 ?? [];
+
     return {
       source: 'amazon',
       externalId: product.asin,
@@ -320,8 +405,10 @@ export class KeepaAmazonProvider implements AmazonProvider {
       estimatedSales: monthlySold,
       estimatedSalesKind: monthlySold != null ? 'estimated' : 'unavailable',
       gmvKind: 'unavailable',
-      growthPct: undefined,
-      brand: product.brand ?? product.manufacturer ?? undefined,
+      growthPct,
+      growthPct7,
+      growthPct30,
+      brand,
       rating,
       reviewCount,
       description: product.description ?? undefined,
@@ -331,11 +418,20 @@ export class KeepaAmazonProvider implements AmazonProvider {
         keepaDomain: market.keepaDomain,
         amazonHost: market.amazonHost,
         rootCategory: product.rootCategory,
+        salesRankDrops30: product.salesRankDrops30 ?? null,
+        salesRankDrops90: product.salesRankDrops90 ?? null,
+        bsrAvg30: this.positive(avg30[IDX.SALES]) ?? null,
+        growthPct7: growthPct7 ?? null,
+        growthPct30: growthPct30 ?? null,
+        historyEnabled: true,
         labels: {
           estimatedSales: 'Ventas mensuales estimadas (Keepa)',
           demand: 'Demanda estimada (Keepa)',
           rating: 'Valoración Amazon',
           rank: 'Best Sellers Rank (BSR)',
+          growthPct: 'Mejora BSR 7d (csv) o vs media 30d (Keepa)',
+          growthPct7: 'Mejora BSR vs ~7 días (Keepa csv)',
+          growthPct30: 'Mejora BSR vs media 30d (Keepa)',
         },
       },
     };
@@ -344,6 +440,37 @@ export class KeepaAmazonProvider implements AmazonProvider {
   private positive(value: number | undefined | null): number | undefined {
     if (value == null || value < 0) return undefined;
     return value;
+  }
+
+  /**
+   * ETA from two signals: real ms/call observed so far, and avg calls/category
+   * observed so far (which implicitly folds in each category's share of the
+   * product-fetch chunk calls). Self-corrects as the run progresses instead
+   * of trying to predict Keepa's rate-limit behavior upfront.
+   */
+  private reportProgress(tracker: ProgressTracker, market: string, step: string) {
+    if (!tracker.onProgress) return;
+    const elapsedMs = Date.now() - tracker.startedAt;
+    let etaSeconds: number | null = null;
+    if (tracker.categoriesDone > 0 && tracker.callsDone > 0) {
+      const msPerCall = elapsedMs / tracker.callsDone;
+      const callsPerCategory = tracker.callsDone / tracker.categoriesDone;
+      const remainingCategories = Math.max(
+        tracker.categoriesTotal - tracker.categoriesDone,
+        0,
+      );
+      const estimatedRemainingCalls = callsPerCategory * remainingCategories;
+      etaSeconds = Math.round((estimatedRemainingCalls * msPerCall) / 1000);
+    }
+    tracker.onProgress({
+      market,
+      step,
+      categoriesDone: tracker.categoriesDone,
+      categoriesTotal: tracker.categoriesTotal,
+      callsDone: tracker.callsDone,
+      elapsedMs,
+      etaSeconds,
+    });
   }
 
   async lookupByAsinOrUrl(
@@ -385,14 +512,14 @@ export class KeepaAmazonProvider implements AmazonProvider {
   async getStatus() {
     const defaultPerCategory = this.perCategoryLimit();
     const configuredMarkets = this.marketsToIngest();
-    const categoriesPerMarket = configuredMarkets.map((code) => ({
-      market: code,
-      categories: (
-        BESTSELLER_CATEGORIES[code] ??
-        BESTSELLER_CATEGORIES.ES ??
-        []
-      ).length,
-    }));
+    const categoriesPerMarket = configuredMarkets.map((code) => {
+      const labels = this.ingestCategoryLabels(code);
+      return {
+        market: code,
+        categories: labels.length,
+        labels,
+      };
+    });
 
     if (!this.enabled()) {
       return {
@@ -415,5 +542,10 @@ export class KeepaAmazonProvider implements AmazonProvider {
       markets: configuredMarkets,
       categoriesPerMarket,
     };
+  }
+
+  /** Browse-node allowlist labels used at ingest (tops por categoría). */
+  ingestCategoryLabels(marketCode?: string): string[] {
+    return keepaCategoryLabels(marketCode);
   }
 }

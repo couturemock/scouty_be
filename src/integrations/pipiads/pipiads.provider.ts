@@ -189,11 +189,18 @@ export class PipiAdsProvider {
         label: 'Señales públicas PipiAds (sin CTR/CPA/ROAS reales)',
         linkKind: resolved.kind,
         videoId: raw.video_id ?? raw.id,
+        adArchiveId:
+          raw.ad_archive_id ??
+          raw.adArchiveId ??
+          raw.facebook_ad_id ??
+          raw.facebookAdId ??
+          raw.archive_id,
         mediaUrl: raw.video_url || undefined,
         playCount: raw.play_count ?? raw.ad_play_count,
         likeCount: raw.digg_count ?? raw.like_count,
         deliveryDays: raw.put_day ?? raw.put_days ?? raw.delivery_days,
         adSpendUsd: raw.ad_cost ?? raw.cost,
+        advertiserName: raw.advertiser_name ?? raw.brand_name,
         region: raw.region ?? raw.fetch_region,
       },
       aiAnalysis: this.analyzeAd(raw, fallbackTitle),
@@ -216,8 +223,11 @@ export class PipiAdsProvider {
     productTitle: string,
     country?: string,
     limit = 8,
+    opts?: { looseRelevance?: boolean },
   ): Promise<{ ads: CreativeAd[]; creditsUsed: number }> {
-    const keyword = this.keywordFromTitle(productTitle);
+    const keyword = opts?.looseRelevance
+      ? productTitle.trim().slice(0, 80)
+      : this.keywordFromTitle(productTitle);
     const searchSize = Math.min(
       Number(this.config.get('CI_SEARCH_RESULTS') ?? 8),
       20,
@@ -227,8 +237,6 @@ export class PipiAdsProvider {
       5,
     );
     const region = this.regionForCountry(country);
-    // Over-fetch then relevance-filter: PipiAds sometimes ignores keywords and
-    // returns viral ads sorted by plays (Shopify/Canva/etc.).
     const perPlatform = Math.min(20, Math.max(8, Math.ceil(searchSize)));
     const keywords = this.extendKeywords(keyword);
 
@@ -265,7 +273,7 @@ export class PipiAdsProvider {
 
     const mapped = [...tiktokRaw, ...metaRaw]
       .filter((raw) => {
-        // Keep ads that mention at least one significant product token.
+        if (opts?.looseRelevance) return true;
         const hay = this.rawHaystack(raw);
         const tokens = productQueryTokens(keyword);
         if (!tokens.length) return true;
@@ -286,8 +294,19 @@ export class PipiAdsProvider {
       unique.push(ad);
     }
 
-    const relevant = filterAdsByRelevance(unique, productTitle);
-    if (unique.length && !relevant.length) {
+    const minScore = opts?.looseRelevance
+      ? 0.15
+      : productQueryTokens(keyword).length <= 4
+        ? 0.2
+        : 0.34;
+    let relevant = filterAdsByRelevance(unique, productTitle, minScore);
+    if (!relevant.length && unique.length && opts?.looseRelevance) {
+      // Seed discovery: keep engagement leaders even if copy is noisy
+      relevant = sortAdsByEngagement(unique).slice(0, limit);
+      this.logger.debug(
+        `PipiAds loose: using top engagement for "${keyword}" (${relevant.length})`,
+      );
+    } else if (unique.length && !relevant.length) {
       this.logger.warn(
         `PipiAds: ${unique.length} ads for "${productTitle}" discarded as irrelevant (keyword="${keyword}")`,
       );

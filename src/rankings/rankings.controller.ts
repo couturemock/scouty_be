@@ -18,10 +18,13 @@ export class RankingsController {
   ) {}
 
   @Get('meta')
-  async meta(@CurrentUser() user: User) {
+  async meta(
+    @CurrentUser() user: User,
+    @Query('market') market?: string,
+  ) {
     const access = await this.usage.peekRankingsView(user);
     return {
-      ...(await this.rankings.listAvailable(user)),
+      ...(await this.rankings.listAvailable(user, market)),
       rankingsAccess: {
         unlimited: planById(user.plan).rankingsViewsLifetime === null,
         used: access.used,

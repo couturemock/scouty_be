@@ -30,7 +30,14 @@ export class RankingsService {
       // V1: categorías visibles; Pro se comunica en UI.
     }
 
-    const boardScopes: RankingScope[] = ['rising', 'margin', 'profit'];
+    const boardScopes: RankingScope[] = [
+      'rising',
+      'trending',
+      'winners',
+      'ad_winners',
+      'margin',
+      'profit',
+    ];
     const isBoard = boardScopes.includes(scope);
 
     const effectiveScope: RankingScope =
@@ -75,17 +82,38 @@ export class RankingsService {
       .slice(0, 10)
       .map((e, i) => ({ ...e, position: i + 1 }));
 
-    // Rising: si no hay board precomputado, calcular al vuelo desde snapshots
-    if (scope === 'rising' && !entries.length) {
-      const risers = await this.products.listRisers(target, 'published');
+    // Rising / trending: if empty board, use growthPct from catalog
+    if ((scope === 'rising' || scope === 'trending') && !entries.length) {
+      const bestsellers = await this.products.listBestsellers(target, 40);
+      const sorted = [...bestsellers]
+        .filter((row) => (row.product.growthPct ?? 0) > 0)
+        .sort(
+          (a, b) => (b.product.growthPct ?? 0) - (a.product.growthPct ?? 0),
+        );
       return {
         weekKey,
         scope,
         scopeKey: target,
         targetMarket: amazonMarket(target),
-        items: risers.map((row, index) => ({
+        items: sorted.slice(0, 10).map((row, index) => ({
           position: index + 1,
-          score: row.rankDelta,
+          score: row.product.growthPct,
+          signalSources: row.product.sources ?? ['amazon'],
+          product: row.product,
+        })),
+      };
+    }
+
+    if (scope === 'winners' && !entries.length) {
+      const bestsellers = await this.products.listBestsellers(target, 40);
+      return {
+        weekKey,
+        scope,
+        scopeKey: target,
+        targetMarket: amazonMarket(target),
+        items: bestsellers.slice(0, 10).map((row, index) => ({
+          position: index + 1,
+          score: row.score,
           signalSources: row.product.sources ?? ['amazon'],
           product: row.product,
         })),
@@ -137,18 +165,23 @@ export class RankingsService {
     };
   }
 
-  async listAvailable(user: User) {
+  async listAvailable(user: User, market?: string) {
     const plan = planById(user.plan);
     const weekKey = await this.catalog.assertPublished();
-    const target = amazonMarket(user.targetMarket);
-    const categories = plan.top10ByCategory
+    const target = amazonMarket(market || user.targetMarket);
+    const allowlist = this.products.ingestCategoriesForMarket(target.code);
+    // Scoped to this market's products — category scopeKeys aren't
+    // market-specific in the table, so ES and US labels used to get mixed
+    // into one chip list regardless of which market tab was selected.
+    const fromDb = plan.top10ByCategory
       ? await this.rankings
           .createQueryBuilder('r')
+          .innerJoin('r.product', 'p')
           .select('DISTINCT r.scopeKey', 'scopeKey')
-          .where('r.weekKey = :weekKey AND r.scope = :scope', {
-            weekKey,
-            scope: 'category',
-          })
+          .where(
+            'r.weekKey = :weekKey AND r.scope = :scope AND p.country = :country',
+            { weekKey, scope: 'category', country: target.code },
+          )
           .getRawMany<{ scopeKey: string }>()
       : [];
     const countries = plan.top10ByCountry
@@ -162,14 +195,24 @@ export class RankingsService {
           .getRawMany<{ scopeKey: string }>()
       : [];
 
+    const categories = [
+      ...new Set([
+        ...allowlist,
+        ...fromDb.map((c) => c.scopeKey).filter((k) => k && k !== '*'),
+      ]),
+    ];
+
     return {
       weekKey,
       general: true,
       rising: true,
+      trending: true,
+      winners: true,
+      ad_winners: true,
       margin: true,
       profit: true,
       targetMarket: target,
-      categories: categories.map((c) => c.scopeKey),
+      categories,
       countries: countries.map((c) => c.scopeKey),
       plan: plan.id,
     };

@@ -1,6 +1,6 @@
 /**
  * Build a marketplace search query from an Amazon title.
- * Drops brand-ish prefixes, sizes, and Spanish filler so AliExpress/1688 match better.
+ * Drops brand-ish prefixes, sizes, and Spanish filler so AliExpress/Alibaba match better.
  */
 const STOP = new Set([
   'en',
@@ -38,7 +38,7 @@ const STOP = new Set([
   'set',
 ]);
 
-/** Common ES product words → EN (AliExpress/1688 search better in English). */
+/** Common ES product words → EN (AliExpress/Alibaba search better in English). */
 const ES_EN: Record<string, string> = {
   pulverizador: 'sprayer',
   spray: 'spray',
@@ -94,7 +94,7 @@ export function supplierSearchKeywords(title: string, maxWords = 5): string {
   const mapped = words.map((w) => ES_EN[w.toLowerCase()] ?? w);
   const hasEsMap = words.some((w) => ES_EN[w.toLowerCase()]);
 
-  // If we translated ES terms, prefer the English mapped phrase (better AE/1688 recall).
+  // If we translated ES terms, prefer the English mapped phrase (better AE/Alibaba recall).
   const chosen = hasEsMap
     ? mapped.map((w) => w.toLowerCase())
     : mapped;

@@ -8,7 +8,17 @@ import {
   summarizeWinningFormats,
   type WinningFormatStat,
 } from '../integrations/ads/ad-engagement';
+import {
+  librarySearchTerm,
+  metaAdLibraryAdUrl,
+  metaAdLibrarySearchUrl,
+  tiktokAdLibrarySearchUrl,
+} from '../integrations/ads/creative-source-url';
 import { CreativeAdsProvider } from '../integrations/ads/creative-ads.provider';
+import {
+  computeAdClusterScore,
+  type AdClusterScore,
+} from '../integrations/ads/ad-score';
 import { CreativeAd } from '../integrations/types';
 import { Product } from '../products/product.entity';
 import { UsageService } from '../usage/usage.service';
@@ -39,52 +49,102 @@ export class CreativeIntelligenceService {
     return 'Anuncios similares ordenados por vistas e interacciones públicas (PipiAds). No son CTR, CPA ni ROAS de Meta o TikTok Ads Manager.';
   }
 
-  /** Prefer CDN creative when an older snapshot only stored a library search URL. */
-  repairAdLinks(ads: CreativeAd[]): CreativeAd[] {
+  /**
+   * Prefer Meta/TikTok library pages. Never promote PipiAds CDN mp4 to sourceUrl
+   * (browsers download the file instead of opening an ad page).
+   */
+  repairAdLinks(ads: CreativeAd[], country = 'US'): CreativeAd[] {
     return ads.map((ad) => {
       const signals = { ...(ad.publicSignals ?? {}) };
       const media = String(signals.mediaUrl ?? signals.videoUrl ?? '').trim();
-      const src = String(ad.sourceUrl ?? '').trim();
-      const isSearch =
-        signals.linkKind === 'search' ||
-        (src.includes('ads/library') &&
-          src.includes('q=') &&
-          !src.includes('id=')) ||
-        (src.includes('library.tiktok.com') && !src.includes('/ads/detail'));
+      let src = String(ad.sourceUrl ?? '').trim();
+      const isCdn =
+        /\.(mp4|m3u8|webm)(\?|$)/i.test(src) ||
+        /pipiads\.com|pipispy\.com/i.test(src);
 
-      if (media && /^https?:\/\//i.test(media) && (!src || isSearch)) {
+      if (media && /^https?:\/\//i.test(media)) {
+        signals.mediaUrl = media;
+      }
+
+      // Already a deep Meta ad link — keep it
+      if (
+        !isCdn &&
+        src.includes('facebook.com') &&
+        src.includes('ads/library') &&
+        /[?&]id=\d{5,}/.test(src)
+      ) {
         return {
           ...ad,
-          sourceUrl: media,
-          publicSignals: { ...signals, linkKind: 'ad', mediaUrl: media },
+          sourceUrl: src,
+          publicSignals: { ...signals, linkKind: 'ad' },
         };
       }
-      if (src.includes('pipiads.com') && /\.(mp4|m3u8|webm)(\?|$)/i.test(src)) {
+
+      if (isCdn || !src) {
+        const archiveId = String(
+          signals.adArchiveId ?? signals.facebookAdId ?? '',
+        ).trim();
+        if (
+          (ad.platform === 'facebook' || ad.platform === 'instagram') &&
+          /^\d{5,}$/.test(archiveId)
+        ) {
+          return {
+            ...ad,
+            sourceUrl: metaAdLibraryAdUrl(archiveId, 'ALL'),
+            publicSignals: { ...signals, linkKind: 'ad' },
+          };
+        }
+
+        const term = librarySearchTerm(
+          String(signals.advertiserName ?? ad.title ?? 'product'),
+        );
+        const href =
+          ad.platform === 'tiktok'
+            ? tiktokAdLibrarySearchUrl(term, country)
+            : metaAdLibrarySearchUrl(term, country);
         return {
           ...ad,
-          publicSignals: { ...signals, linkKind: 'ad', mediaUrl: src },
+          sourceUrl: href,
+          publicSignals: { ...signals, linkKind: 'search' },
         };
       }
-      return ad;
+
+      return {
+        ...ad,
+        sourceUrl: src,
+        publicSignals: signals,
+      };
     });
   }
 
-  private withRanking(ads: CreativeAd[]) {
-    const ranked = sortAdsByEngagement(this.repairAdLinks(ads));
+  private withRanking(ads: CreativeAd[], country?: string) {
+    const ranked = sortAdsByEngagement(this.repairAdLinks(ads, country));
     return {
       ads: ranked,
       winningFormats: summarizeWinningFormats(ranked),
     };
   }
 
+  adScoreFromAds(
+    ads: CreativeAd[],
+    provider?: string,
+  ): AdClusterScore | null {
+    if (provider === 'fixture' || !ads.length) return null;
+    const advertisers = ads
+      .map((ad) => String(ad.publicSignals?.advertiserName ?? ''))
+      .filter(Boolean);
+    return computeAdClusterScore(ads, advertisers);
+  }
+
   getStored(product: {
     meta?: Record<string, unknown> | null;
+    country?: string;
   }): StoredCreativeIntelligence | null {
     const stored = product.meta?.creativeIntelligence as
       | StoredCreativeIntelligence
       | undefined;
     if (!stored?.ads?.length) return null;
-    const ranked = this.withRanking(stored.ads);
+    const ranked = this.withRanking(stored.ads, product.country);
     return {
       ...stored,
       ads: ranked.ads,
@@ -99,7 +159,8 @@ export class CreativeIntelligenceService {
       8,
       product.country,
     );
-    const ranked = this.withRanking(ads);
+    const ranked = this.withRanking(ads, product.country);
+    const adScore = this.adScoreFromAds(ranked.ads, provider);
     const payload: StoredCreativeIntelligence = {
       ads: ranked.ads,
       winningFormats: ranked.winningFormats,
@@ -109,7 +170,11 @@ export class CreativeIntelligenceService {
       fromSnapshot: true,
       disclaimer: this.disclaimer(),
     };
-    product.meta = { ...(product.meta ?? {}), creativeIntelligence: payload };
+    product.meta = {
+      ...(product.meta ?? {}),
+      creativeIntelligence: payload,
+      ...(adScore ? { adScore } : { adScore: { total: 0 } }),
+    };
     await this.products.save(product);
     return payload;
   }
@@ -122,7 +187,7 @@ export class CreativeIntelligenceService {
     const topN =
       topNOverride != null && Number.isFinite(topNOverride) && topNOverride > 0
         ? Math.min(Math.floor(topNOverride), 200)
-        : Number(this.config.get('CI_SNAPSHOT_TOP_N') ?? 30);
+        : Number(this.config.get('CI_SNAPSHOT_TOP_N') ?? 60);
     const rows = await this.products.find({ where: { catalogWeekKey: weekKey } });
     const top = [...rows]
       .sort((a, b) => scoreFn(b) - scoreFn(a))
@@ -165,7 +230,7 @@ export class CreativeIntelligenceService {
       8,
       country,
     );
-    const ranked = this.withRanking(ads);
+    const ranked = this.withRanking(ads, country);
     return {
       ads: ranked.ads,
       winningFormats: ranked.winningFormats,
@@ -212,9 +277,10 @@ export class CreativeIntelligenceService {
       8,
       market,
     );
-    const ranked = this.withRanking(ads);
+    const ranked = this.withRanking(ads, market);
 
     if (product) {
+      const adScore = this.adScoreFromAds(ranked.ads, provider);
       product.meta = {
         ...(product.meta ?? {}),
         creativeIntelligence: {
@@ -226,6 +292,7 @@ export class CreativeIntelligenceService {
           fromSnapshot: false,
           disclaimer: this.disclaimer(),
         },
+        ...(adScore ? { adScore } : {}),
       };
       await this.products.save(product);
     }

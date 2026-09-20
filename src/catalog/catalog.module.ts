@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminGuard } from '../auth/admin.guard';
 import { IntegrationsModule } from '../integrations/integrations.module';
+import { JobsModule } from '../jobs/jobs.module';
 import { ProductsModule } from '../products/products.module';
 import { AdminCatalogController } from './admin-catalog.controller';
 import { CatalogPublicController } from './catalog-public.controller';
@@ -14,6 +15,7 @@ import { CatalogService } from './catalog.service';
     TypeOrmModule.forFeature([CatalogState, CatalogSnapshot]),
     forwardRef(() => ProductsModule),
     IntegrationsModule,
+    JobsModule,
   ],
   controllers: [AdminCatalogController, CatalogPublicController],
   providers: [CatalogService, AdminGuard],

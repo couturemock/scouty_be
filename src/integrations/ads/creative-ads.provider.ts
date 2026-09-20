@@ -66,10 +66,14 @@ export class CreativeAdsProvider implements AdsProvider {
             cached: false,
           };
         }
-        this.logger.warn(
-          `PipiAds devolvió ${ads.length} ads para "${productTitle}", usando fixture parcial`,
-        );
-        if (ads.length) {
+        // A single ad clearing a loose relevance filter is noise, not
+        // signal — one shared keyword is enough to pass but not enough to
+        // trust as "the ad for this product". Below 2, prefer the honest
+        // search-shortcut fixture over presenting a possibly wrong match.
+        if (ads.length >= 2) {
+          this.logger.warn(
+            `PipiAds devolvió ${ads.length} ads para "${productTitle}", usando fixture parcial`,
+          );
           return {
             ads,
             provider: 'pipiads',
@@ -77,6 +81,9 @@ export class CreativeAdsProvider implements AdsProvider {
             cached: false,
           };
         }
+        this.logger.warn(
+          `PipiAds devolvió ${ads.length} ads para "${productTitle}" (insuficiente), usando fixture`,
+        );
       } catch (err) {
         this.logger.warn(`PipiAds falló: ${err}. Fallback fixture.`);
       }

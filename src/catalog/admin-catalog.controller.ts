@@ -11,6 +11,7 @@ import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser } from '../common/decorators';
 import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
 import { PipiAdsProvider } from '../integrations/pipiads/pipiads.provider';
+import { IngestionQueueService } from '../jobs/ingestion-queue.service';
 import { ProductsService } from '../products/products.service';
 import { User } from '../users/user.entity';
 import { CatalogService } from './catalog.service';
@@ -25,6 +26,7 @@ export class AdminCatalogController {
     private readonly keepa: KeepaAmazonProvider,
     private readonly pipiads: PipiAdsProvider,
     private readonly config: ConfigService,
+    private readonly ingestQueue: IngestionQueueService,
   ) {}
 
   @Get('status')
@@ -58,16 +60,47 @@ export class AdminCatalogController {
 
   /** Historial de snapshots, más reciente primero. */
   @Get('snapshots')
-  snapshots() {
-    return this.catalog.listSnapshots();
+  async snapshots() {
+    const rows = await this.catalog.listSnapshots();
+    const withAdWinners = await this.products.weekKeysWithAdWinners(
+      rows.map((r) => r.weekKey),
+    );
+    return rows.map((row) => ({
+      ...row,
+      hasAdWinners: withAdWinners.has(row.weekKey),
+    }));
   }
 
   /**
-   * Ejecuta ingesta Keepa → borrador.
+   * Reintenta solo Ad Winners (PipiAds → Ad Score) para un weekKey ya
+   * ingerido, sin repetir Keepa/CI. Si no se pasan markets, usa los de ese
+   * snapshot.
+   */
+  @Post('rerun-ad-winners')
+  async rerunAdWinners(
+    @Query('weekKey') weekKey: string,
+    @Query('markets') markets?: string,
+  ) {
+    const explicit = markets
+      ?.split(',')
+      .map((m) => m.trim().toUpperCase())
+      .filter(Boolean);
+    let list = explicit ?? [];
+    if (!list.length) {
+      const rows = await this.catalog.listSnapshots();
+      list = rows.find((r) => r.weekKey === weekKey)?.markets ?? [];
+    }
+    return this.products.rerunAdWinners(weekKey, list);
+  }
+
+  /**
+   * Encola una ingesta Keepa → borrador; corre en el worker de background
+   * (Redis/BullMQ), no bloquea esta request. Seguí el progreso con
+   * GET ingest-status.
    * Query: markets, productsPerCategory (ASINs por categoría Keepa), ciTopN (CI PipiAds).
    */
   @Post('ingest')
-  ingest(
+  async ingest(
     @Query('markets') markets?: string,
     @Query('productsPerCategory') productsPerCategory?: string,
     @Query('ciTopN') ciTopN?: string,
@@ -78,11 +111,26 @@ export class AdminCatalogController {
       .filter(Boolean);
     const perCat = productsPerCategory ? Number(productsPerCategory) : undefined;
     const topN = ciTopN ? Number(ciTopN) : undefined;
-    return this.products.runWeeklyIngestion(list, {
+    const { jobId, alreadyRunning } = await this.ingestQueue.enqueue({
+      markets: list,
       productsPerCategory:
         perCat != null && Number.isFinite(perCat) ? perCat : undefined,
       ciTopN: topN != null && Number.isFinite(topN) ? topN : undefined,
     });
+    return {
+      queued: true,
+      jobId,
+      alreadyRunning,
+      message: alreadyRunning
+        ? 'Ya hay una ingesta en curso — se está siguiendo esa.'
+        : 'Ingesta encolada. Corre en segundo plano; seguí el progreso en esta misma pantalla.',
+    };
+  }
+
+  /** Progreso de la ingesta en curso (si hay una corriendo en el worker). */
+  @Get('ingest-status')
+  ingestStatus() {
+    return this.ingestQueue.status();
   }
 
   /** Publica el borrador (o weekKey indicado) como catálogo activo en la web. */

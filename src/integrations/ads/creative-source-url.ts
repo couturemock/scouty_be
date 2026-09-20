@@ -28,10 +28,13 @@ export function isUselessCreativeUrl(url: string | null | undefined): boolean {
       return !hasAd
     }
 
-    // PipiAds CDN videos ARE the creative — open them. Other bare mp4s are not a page.
-    if (/\.(mp4|m3u8|webm)(\?|$)/i.test(u.pathname)) {
-      if (host.includes('pipiads.com') || host.includes('pipispy.com')) return false
-      return true
+    // PipiAds / CDN videos are media files — opening them downloads the video.
+    // Prefer Meta/TikTok library pages instead; keep CDN only as mediaUrl elsewhere.
+    if (/\.(mp4|m3u8|webm)(\?|$)/i.test(u.pathname)) return true
+    if (host.includes('pipiads.com') || host.includes('pipispy.com')) {
+      if (/\.(mp4|m3u8|webm|jpg|jpeg|png|webp)(\?|$)/i.test(u.pathname + u.search)) {
+        return true
+      }
     }
     return false
   } catch {
@@ -166,49 +169,53 @@ export function resolveCreativeSourceUrl(opts: {
   ].filter(Boolean) as string[]
 
   for (const c of candidates) {
+    // Skip raw CDN video — we want library pages, not downloads
+    if (/\.(mp4|m3u8|webm)(\?|$)/i.test(c)) continue
+    if (/pipiads\.com|pipispy\.com/i.test(c)) continue
     if (!isUselessCreativeUrl(c)) {
       return { url: c, kind: 'ad' }
     }
   }
 
+  // Meta archive id before page_id / generic ad_id (those are often not library ad ids)
   const archiveId = pickString(raw, [
     'ad_archive_id',
     'adArchiveId',
     'facebook_ad_id',
     'facebookAdId',
-    'ads_id',
-    'adsId',
     'archive_id',
     'meta_ad_id',
+    'ads_id',
+    'adsId',
   ])
-  if (archiveId && (opts.platform === 'facebook' || opts.platform === 'instagram')) {
+  if (
+    archiveId &&
+    (opts.platform === 'facebook' || opts.platform === 'instagram') &&
+    /^\d{5,}$/.test(archiveId)
+  ) {
     return { url: metaAdLibraryAdUrl(archiveId, 'ALL'), kind: 'ad' }
   }
 
   const videoId = pickString(raw, ['aweme_id', 'awemeId', 'tiktok_id'])
   if (opts.platform === 'tiktok' && videoId && /^\d{8,}$/.test(videoId)) {
     return {
-      url: `https://www.tiktok.com/video/${videoId}`,
-      kind: 'ad',
+      url: tiktokAdLibrarySearchUrl(
+        pickString(raw, ['advertiser_name', 'brand_name', 'desc']) ||
+          opts.productTitle,
+        country,
+      ),
+      kind: 'search',
     }
   }
 
-  // PipiAds list often only has CDN video_url (hex video_id ≠ TikTok aweme id).
-  const mediaUrl = pickString(raw, ['video_url', 'videoUrl'])
-  if (mediaUrl && !isUselessCreativeUrl(mediaUrl)) {
-    return { url: mediaUrl, kind: 'ad' }
-  }
+  // Do NOT open PipiAds CDN as the primary link (browser downloads the file).
+  const term = librarySearchTerm(
+    pickString(raw, ['advertiser_name', 'brand_name']) || opts.productTitle,
+  )
 
-  const authorUrl = pickString(raw, [
-    'tiktok_author_url',
-    'tiktokAuthorUrl',
-    'author_url',
-  ])
-  if (authorUrl && !isUselessCreativeUrl(authorUrl)) {
-    return { url: authorUrl, kind: 'profile' }
+  if (opts.platform === 'tiktok') {
+    return { url: tiktokAdLibrarySearchUrl(term, country), kind: 'search' }
   }
-
-  const term = librarySearchTerm(opts.productTitle)
 
   return { url: metaAdLibrarySearchUrl(term, country), kind: 'search' }
 }

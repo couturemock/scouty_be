@@ -1,17 +1,18 @@
 import { Module, OnModuleInit } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AdminGuard } from '../auth/admin.guard';
+import { QueueModule } from '../queue/queue.module';
 import { AdminWaitlistController } from './admin-waitlist.controller';
 import { WaitlistController } from './waitlist.controller';
 import { WaitlistEntry } from './waitlist-entry.entity';
-import { WaitlistScheduler } from './waitlist.scheduler';
+import { WaitlistQueueService } from './waitlist-queue.service';
 import { WaitlistService } from './waitlist.service';
 import { WaitlistSettings } from './waitlist-settings.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([WaitlistSettings, WaitlistEntry])],
+  imports: [QueueModule, TypeOrmModule.forFeature([WaitlistSettings, WaitlistEntry])],
   controllers: [WaitlistController, AdminWaitlistController],
-  providers: [WaitlistService, WaitlistScheduler, AdminGuard],
+  providers: [WaitlistService, WaitlistQueueService, AdminGuard],
   exports: [WaitlistService],
 })
 export class WaitlistModule implements OnModuleInit {

@@ -56,6 +56,58 @@ function pickUrl(p: AeProduct): string | null {
   return null;
 }
 
+/** lastest_volume / orders from Affiliate-style payloads — never invented. */
+function pickSold(p: AeProduct): number | null {
+  return (
+    asNumber(p.lastest_volume) ??
+    asNumber(p.latest_volume) ??
+    asNumber(p.last_volume) ??
+    asNumber(p.volume) ??
+    asNumber(p.orders) ??
+    asNumber(p.order_count) ??
+    asNumber(p.historical_sold) ??
+    asNumber(p.sold) ??
+    asNumber(p.sales) ??
+    null
+  );
+}
+
+function mapAeOffers(
+  list: AeProduct[],
+  limit: number,
+  salePriceEur?: number,
+): SupplierOffer[] {
+  const offers: SupplierOffer[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of list) {
+    const price = pickPrice(raw);
+    const listingUrl = pickUrl(raw);
+    if (price == null || price <= 0 || !listingUrl) continue;
+    if (salePriceEur != null && price >= salePriceEur * 0.9) continue;
+    if (seen.has(listingUrl)) continue;
+    seen.add(listingUrl);
+
+    const sold = pickSold(raw);
+    offers.push({
+      source: 'aliexpress',
+      name: pickTitle(raw),
+      listingUrl,
+      unitPriceEur: round2(price),
+      shippingEstimateEur: undefined,
+      leadTimeDays: 12,
+      reliabilityScore: 70,
+      region: 'AliExpress',
+      kind: 'live',
+      soldCount: sold ?? undefined,
+      popularity: sold ?? undefined,
+      note: 'Precio AliExpress (spike RapidAPI). Match por keyword — verificá que sea el mismo producto.',
+    });
+    if (offers.length >= limit) break;
+  }
+  return offers;
+}
+
 function extractList(payload: unknown): AeProduct[] {
   if (!payload || typeof payload !== 'object') return [];
   const root = payload as Record<string, unknown>;
@@ -127,7 +179,7 @@ export class AliExpressSupplierProvider {
       keywords,
       page_no: '1',
       page_size: String(Math.min(Math.max(limit * 2, 8), 20)),
-      sort: 'SALE_PRICE_ASC',
+      sort: 'LAST_VOLUME_DESC',
       target_currency: 'EUR',
       target_language: 'EN',
       ship_to_country: shipToForMarket(market),
@@ -152,36 +204,42 @@ export class AliExpressSupplierProvider {
       });
       if (!res.ok) {
         this.logger.warn(`AliExpress HTTP ${res.status}: ${res.statusText}`);
-        return [];
+        params.set('sort', 'SALE_PRICE_ASC');
+        const retryUrl = `https://${host}/api/v3/products?${params.toString()}`;
+        const retry = await fetch(retryUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'X-RapidAPI-Key': key,
+            'X-RapidAPI-Host': host,
+          },
+        });
+        if (!retry.ok) return [];
+        const list = extractList(await retry.json());
+        const offers = mapAeOffers(list, limit, salePriceEur);
+        this.logger.log(
+          `AliExpress "${keywords}" → ${offers.length} live offers (from ${list.length} raw, price sort fallback)`,
+        );
+        return offers;
       }
       const json = (await res.json()) as unknown;
-      const list = extractList(json);
-      const offers: SupplierOffer[] = [];
-      const seen = new Set<string>();
-
-      for (const raw of list) {
-        const price = pickPrice(raw);
-        const listingUrl = pickUrl(raw);
-        if (price == null || price <= 0 || !listingUrl) continue;
-        if (salePriceEur != null && price >= salePriceEur * 0.9) continue;
-        if (seen.has(listingUrl)) continue;
-        seen.add(listingUrl);
-
-        offers.push({
-          source: 'aliexpress',
-          name: pickTitle(raw),
-          listingUrl,
-          unitPriceEur: round2(price),
-          shippingEstimateEur: undefined,
-          leadTimeDays: 12,
-          reliabilityScore: 70,
-          region: 'AliExpress',
-          kind: 'live',
-          note: 'Precio AliExpress (spike RapidAPI). Match por keyword — verificá que sea el mismo producto.',
+      let list = extractList(json);
+      if (!list.length) {
+        params.set('sort', 'SALE_PRICE_ASC');
+        const retryUrl = `https://${host}/api/v3/products?${params.toString()}`;
+        const retry = await fetch(retryUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'X-RapidAPI-Key': key,
+            'X-RapidAPI-Host': host,
+          },
         });
-        if (offers.length >= limit) break;
+        if (retry.ok) {
+          list = extractList(await retry.json());
+        }
       }
-
+      const offers = mapAeOffers(list, limit, salePriceEur);
       this.logger.log(
         `AliExpress "${keywords}" → ${offers.length} live offers (from ${list.length} raw)`,
       );

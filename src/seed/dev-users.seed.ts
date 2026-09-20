@@ -35,7 +35,7 @@ export class DevUsersSeedService implements OnModuleInit {
     const adminPassword =
       this.config.get<string>('DEV_ADMIN_PASSWORD') ?? 'Admin123!';
     const userEmail = (
-      this.config.get<string>('DEV_USER_EMAIL') ?? 'user@scoutly.dev'
+      this.config.get<string>('DEV_USER_EMAIL') ?? 'user@scoutly.dev4'
     ).toLowerCase();
     const userPassword =
       this.config.get<string>('DEV_USER_PASSWORD') ?? 'User123!';

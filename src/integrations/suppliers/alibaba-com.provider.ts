@@ -158,7 +158,7 @@ function titleLooksRelated(keywords: string, title: string): boolean {
  * Prefiere imagen+keyword juntos; evita basura barata / packaging / URLs inventadas.
  *
  * Env:
- *   ALIBABA_COM_RAPIDAPI_KEY (falls back to ALIEXPRESS / 1688 key)
+ *   ALIBABA_COM_RAPIDAPI_KEY (falls back to ALIEXPRESS_RAPIDAPI_KEY)
  *   ALIBABA_COM_RAPIDAPI_HOST (default otapi-alibaba.p.rapidapi.com)
  *   ALIBABA_COM_MAX_CALLS_PER_RUN (default 15)
  */
@@ -180,7 +180,6 @@ export class AlibabaComSupplierProvider {
   private apiKey() {
     return (
       this.config.get<string>('ALIBABA_COM_RAPIDAPI_KEY')?.trim() ||
-      this.config.get<string>('ALIBABA_1688_RAPIDAPI_KEY')?.trim() ||
       this.config.get<string>('ALIEXPRESS_RAPIDAPI_KEY')?.trim() ||
       ''
     );
@@ -388,6 +387,8 @@ export class AlibabaComSupplierProvider {
         reliabilityScore: opts.imageUrl && opts.keywords ? 72 : 58,
         region: 'Alibaba.com',
         kind: 'live' as const,
+        soldCount: c.volume > 0 ? c.volume : undefined,
+        popularity: c.volume > 0 ? c.volume : undefined,
         note: opts.matchNote,
       }));
 

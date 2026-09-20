@@ -13,6 +13,9 @@ export type RankingScope =
   | 'category'
   | 'country'
   | 'rising'
+  | 'trending'
+  | 'winners'
+  | 'ad_winners'
   | 'margin'
   | 'profit';
 
