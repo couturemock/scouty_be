@@ -84,7 +84,9 @@ export class RankingsService {
 
     // Rising / trending: if empty board, use growthPct from catalog
     if ((scope === 'rising' || scope === 'trending') && !entries.length) {
-      const bestsellers = await this.products.listBestsellers(target, 40);
+      const bestsellers = await this.products.listBestsellers(target, 40, 'published', {
+        requireSupplier: true,
+      });
       const sorted = [...bestsellers]
         .filter((row) => (row.product.growthPct ?? 0) > 0)
         .sort(
@@ -105,7 +107,9 @@ export class RankingsService {
     }
 
     if (scope === 'winners' && !entries.length) {
-      const bestsellers = await this.products.listBestsellers(target, 40);
+      const bestsellers = await this.products.listBestsellers(target, 40, 'published', {
+        requireSupplier: true,
+      });
       return {
         weekKey,
         scope,
@@ -122,7 +126,9 @@ export class RankingsService {
 
     // Margin / profit vacíos: ordenar del catálogo publicado
     if ((scope === 'margin' || scope === 'profit') && !entries.length) {
-      const bestsellers = await this.products.listBestsellers(target, 40);
+      const bestsellers = await this.products.listBestsellers(target, 40, 'published', {
+        requireSupplier: true,
+      });
       const sorted = [...bestsellers].sort((a, b) => {
         if (scope === 'margin') {
           return (

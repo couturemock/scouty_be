@@ -1,14 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreativeIntelligenceService } from '../creative/creative-intelligence.service';
+import { productQueryTokens } from '../integrations/ads/ad-engagement';
 import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
-import { CreativeAd } from '../integrations/types';
+import { SupabaseStorageProvider } from '../integrations/storage/supabase-storage.provider';
+import { CommercialSignal, CreativeAd, SupplierOffer } from '../integrations/types';
 import { SuppliersService } from '../integrations/suppliers/suppliers.service';
 import { ProductsService } from '../products/products.service';
 import { UsageService } from '../usage/usage.service';
 import { User } from '../users/user.entity';
 import { Analysis, AnalysisInputType } from './analysis.entity';
+
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
 
 @Injectable()
 export class AnalysisService {
@@ -18,6 +22,7 @@ export class AnalysisService {
     private readonly products: ProductsService,
     private readonly amazon: KeepaAmazonProvider,
     private readonly suppliers: SuppliersService,
+    private readonly storage: SupabaseStorageProvider,
     private readonly ci: CreativeIntelligenceService,
   ) {}
 
@@ -114,6 +119,50 @@ export class AnalysisService {
     return input.slice(0, 80);
   }
 
+  private decodePhotoDataUri(value: string): { buffer: Buffer; contentType: string } {
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/.exec(value.trim());
+    if (!match) {
+      throw new BadRequestException(
+        'Formato de imagen inválido. Se espera un data URI base64 (data:image/...;base64,...).',
+      );
+    }
+    const [, contentType, base64] = match;
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length) throw new BadRequestException('Imagen vacía.');
+    if (buffer.length > MAX_PHOTO_BYTES) {
+      throw new BadRequestException('Imagen demasiado grande (máx 8MB).');
+    }
+    return { buffer, contentType };
+  }
+
+  /** Candidate supplier title -> Amazon search term. Keeps brand tokens
+   * (unlike supplierSearchKeywords, which drops them for AE/Alibaba search) —
+   * a brand name is exactly what makes a Keepa keyword search land on the
+   * right product instead of a same-category competitor. */
+  private amazonSearchTermFromCandidate(title: string, maxWords = 6): string {
+    const tokens = productQueryTokens(title).slice(0, maxWords);
+    return (tokens.length ? tokens.join(' ') : title).slice(0, 80);
+  }
+
+  /** Try each image-search candidate (already popularity-sorted) against
+   * Keepa until one resolves to a real Amazon product. */
+  private async identifyAmazonProductFromImage(
+    imageMatches: SupplierOffer[],
+    market: string,
+  ): Promise<{ signal: CommercialSignal; candidateTitle: string } | null> {
+    for (const candidate of imageMatches.slice(0, 3)) {
+      const term = this.amazonSearchTermFromCandidate(candidate.name);
+      if (!term) continue;
+      const found = await this.amazon
+        .searchByKeyword(term, market, 3)
+        .catch(() => [] as CommercialSignal[]);
+      if (found.length) {
+        return { signal: found[0], candidateTitle: candidate.name };
+      }
+    }
+    return null;
+  }
+
   /** Drop invented creatives (fixture / search-only placeholders). */
   private realAdsOnly(ads: CreativeAd[] | undefined, provider?: string) {
     if (!ads?.length || provider === 'fixture') return [];
@@ -131,35 +180,49 @@ export class AnalysisService {
   ) {
     await this.usage.assertAndIncrement(user, 'analysis');
 
-    const titleHint = this.extractTitle(input.value, input.type);
+    let titleHint = this.extractTitle(input.value, input.type);
     const market = user.targetMarket || 'ES';
 
-    if (input.type === 'photo') {
-      return {
-        id: null,
-        productId: null,
-        identifiedAs: titleHint,
-        message:
-          'Análisis por imagen estará disponible próximamente. Usa enlace Amazon por ahora.',
-        sources: { amazon: null },
-        alternatives: [],
-        profitability: null,
-        creativeIntelligence: { ads: [], paused: true, provider: null },
-      };
-    }
+    let amazonSignal: CommercialSignal | null = null;
+    let imageMatches: SupplierOffer[] = [];
+    /** What we persist as inputValue — the base64 photo itself is too big/opaque to store. */
+    let storedInputValue = input.value;
 
-    const amazonSignal = await this.amazon
-      .lookupByAsinOrUrl(input.value, market)
-      .catch(() => null);
+    if (input.type === 'photo') {
+      const { buffer, contentType } = this.decodePhotoDataUri(input.value);
+      const uploadedUrl = await this.storage
+        .uploadPublic(buffer, contentType, `analysis/${user.id}`)
+        .catch((err) => {
+          throw new BadRequestException(
+            `No pudimos subir la foto: ${err instanceof Error ? err.message : err}`,
+          );
+        });
+      storedInputValue = uploadedUrl;
+
+      imageMatches = await this.suppliers.identifyByImage(uploadedUrl, 5);
+      const identified = await this.identifyAmazonProductFromImage(imageMatches, market);
+      if (identified) {
+        amazonSignal = identified.signal;
+        titleHint = identified.candidateTitle;
+      }
+    } else {
+      amazonSignal = await this.amazon
+        .lookupByAsinOrUrl(input.value, market)
+        .catch(() => null);
+    }
 
     if (!amazonSignal) {
       const row = await this.analyses.save(
         this.analyses.create({
           userId: user.id,
           inputType: input.type,
-          inputValue: input.value,
+          inputValue: storedInputValue,
           productId: null,
-          result: { identifiedAs: titleHint, found: false },
+          result: {
+            identifiedAs: titleHint,
+            found: false,
+            alternatives: imageMatches,
+          },
         }),
       );
       return {
@@ -169,9 +232,13 @@ export class AnalysisService {
         inputValue: row.inputValue,
         identifiedAs: titleHint,
         message:
-          'No encontramos datos de Amazon/Keepa para esa URL. Revisá el enlace o el mercado del perfil.',
+          input.type === 'photo'
+            ? imageMatches.length
+              ? 'No lo identificamos en Amazon, pero esto es lo más parecido que encontramos por imagen en proveedores. Verificá bien antes de usarlo.'
+              : 'No pudimos identificar el producto en la foto. Probá con una imagen más clara o de frente.'
+            : 'No encontramos datos de Amazon/Keepa para esa URL. Revisá el enlace o el mercado del perfil.',
         sources: { amazon: null },
-        alternatives: [],
+        alternatives: imageMatches,
         profitability: null,
         creativeIntelligence: { ads: [], paused: true, provider: null },
       };
@@ -333,7 +400,7 @@ export class AnalysisService {
       this.analyses.create({
         userId: user.id,
         inputType: input.type,
-        inputValue: input.value,
+        inputValue: storedInputValue,
         productId,
         result,
       }),

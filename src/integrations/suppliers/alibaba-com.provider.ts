@@ -2,17 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupplierOffer } from '../types';
 import { supplierSearchKeywords } from './search-keywords';
+import { isLikelyBranded } from '../shared/brand-denylist';
 
 type OtapiItem = Record<string, unknown>;
 
 function round2(n: number) {
   return Number(n.toFixed(2));
-}
-
-function isLikelyBranded(title: string) {
-  return /\b(apple|samsung|sony|nike|adidas|dyson|lego|microsoft|bose|canon|nikon|hp|dell|lenovo|asus|macbook|iphone|ipad)\b/i.test(
-    title,
-  );
 }
 
 function asNumber(v: unknown): number | null {
@@ -254,6 +249,30 @@ export class AlibabaComSupplierProvider {
     }
 
     return [];
+  }
+
+  /**
+   * Pure image search, no product title known yet (e.g. user-uploaded photo
+   * of a product we haven't identified on Amazon). Returns supplier listings
+   * ranked by popularity — their titles are the candidates callers can feed
+   * into an Amazon keyword search to try to identify the real product.
+   */
+  async searchByImageOnly(
+    imageUrl: string,
+    limit = 5,
+  ): Promise<SupplierOffer[]> {
+    if (!this.enabled()) return [];
+    if (this.circuitOpen) return [];
+    const img = normalizeImageUrl(imageUrl);
+    if (!img) return [];
+
+    return this.search({
+      imageUrl: img,
+      limit,
+      matchNote:
+        'Precio Otapi Alibaba. Identificación preliminar por imagen — sin keyword, verificá bien el listing.',
+      logLabel: `image-only ${img.slice(-40)}`,
+    });
   }
 
   private async search(opts: {

@@ -8,6 +8,7 @@ import { AlibabaComSupplierProvider } from './suppliers/alibaba-com.provider';
 import { AlibabaSupplierProvider } from './suppliers/alibaba.provider';
 import { AliExpressSupplierProvider } from './suppliers/aliexpress.provider';
 import { SuppliersService } from './suppliers/suppliers.service';
+import { SupabaseStorageProvider } from './storage/supabase-storage.provider';
 
 @Module({
   providers: [
@@ -20,6 +21,7 @@ import { SuppliersService } from './suppliers/suppliers.service';
     AlibabaComSupplierProvider,
     AliExpressSupplierProvider,
     SuppliersService,
+    SupabaseStorageProvider,
   ],
   exports: [
     PipiAdsClient,
@@ -30,6 +32,7 @@ import { SuppliersService } from './suppliers/suppliers.service';
     AlibabaComSupplierProvider,
     AliExpressSupplierProvider,
     SuppliersService,
+    SupabaseStorageProvider,
   ],
 })
 export class IntegrationsModule {}

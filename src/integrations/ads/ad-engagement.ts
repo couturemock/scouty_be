@@ -39,6 +39,23 @@ export function productQueryTokens(query: string): string[] {
 /**
  * How well an ad's public text matches the product query (0–1).
  * Used to drop viral PipiAds noise when the keyword filter is ignored.
+ *
+ * Deliberately does NOT read `ad.sourceUrl`: when no real per-ad link is
+ * available, `resolveCreativeSourceUrl` builds a library-search fallback URL
+ * that embeds the query itself (e.g. `...&adv_name=portable+blender`).
+ * Scoring against that URL made relevance a tautology — a completely
+ * unrelated ad with no real link still "matched" because the generated
+ * fallback link echoed the search term back. Real bug, found live: a
+ * Fortnite promo and a beauty ASMR clip both scored as relevant to
+ * "portable blender" this way. Only the ad's own title/copy counts.
+ *
+ * Token matching is word-boundary-aware, not a raw substring check — a
+ * plain `hay.includes(t)` let the token "massager" match inside an
+ * unrelated ad's "#kneemassager" hashtag, scoring a knee-massager clip as
+ * relevant to a "neck massager" search. `\b` alone isn't enough (it treats
+ * accented letters as non-word chars, so it'd miss "café" the same way the
+ * denylist regexes did), so this builds the boundary from Unicode letter/
+ * number categories.
  */
 export function adRelevanceScore(
   ad: CreativeAd,
@@ -47,10 +64,11 @@ export function adRelevanceScore(
 ): number {
   const tokens = productQueryTokens(query);
   if (!tokens.length) return 1;
-  const hay = `${ad.title} ${ad.sourceUrl ?? ''} ${extraHaystack}`.toLowerCase();
+  const hay = `${ad.title} ${extraHaystack}`.toLowerCase();
   let hits = 0;
   for (const t of tokens) {
-    if (hay.includes(t)) hits += 1;
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${t}(?![\\p{L}\\p{N}_])`, 'u');
+    if (re.test(hay)) hits += 1;
   }
   return hits / tokens.length;
 }

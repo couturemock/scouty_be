@@ -80,7 +80,7 @@ export class PipiAdsProvider {
       .slice(0, 80);
   }
 
-  /** PipiAds legacy keyword payload. Do not add unknown fields — API returns 400/empty. */
+  /** type:1 = keyword search across ad copy, advertiser, landing URL, product, creative. */
   private extendKeywords(keyword: string) {
     const phrase = keyword.trim().slice(0, 80);
     return [{ type: 1, keyword: phrase }];
@@ -245,6 +245,10 @@ export class PipiAdsProvider {
       page_size: perPlatform,
       plat_type,
       extend_keywords: keywords,
+      // PipiAds defaults to word-segmented OR matching (is_participle=true),
+      // which surfaces top-played ads sharing any single common word instead
+      // of ones actually about the product. false = literal phrase match.
+      is_participle: false,
       region,
       sort: 4,
       sort_type: 'desc',
@@ -295,18 +299,18 @@ export class PipiAdsProvider {
     }
 
     const minScore = opts?.looseRelevance
-      ? 0.15
+      ? 0.2
       : productQueryTokens(keyword).length <= 4
         ? 0.2
         : 0.34;
-    let relevant = filterAdsByRelevance(unique, productTitle, minScore);
-    if (!relevant.length && unique.length && opts?.looseRelevance) {
-      // Seed discovery: keep engagement leaders even if copy is noisy
-      relevant = sortAdsByEngagement(unique).slice(0, limit);
-      this.logger.debug(
-        `PipiAds loose: using top engagement for "${keyword}" (${relevant.length})`,
-      );
-    } else if (unique.length && !relevant.length) {
+    // Real bug found via a live ingest: falling back to "top engagement
+    // regardless of relevance" here surfaced completely unrelated viral
+    // clips (a Fortnite ad, a beauty ASMR video, a Motrin post) under
+    // products like "Portable Blender"/"Neck Massager" — every product
+    // shown must be about that product. If nothing clears the relevance
+    // bar, the honest answer is zero ads for this seed, not the wrong ones.
+    const relevant = filterAdsByRelevance(unique, productTitle, minScore);
+    if (unique.length && !relevant.length) {
       this.logger.warn(
         `PipiAds: ${unique.length} ads for "${productTitle}" discarded as irrelevant (keyword="${keyword}")`,
       );

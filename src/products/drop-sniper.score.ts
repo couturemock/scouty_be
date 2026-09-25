@@ -1,17 +1,26 @@
 import { AdClusterScore } from '../integrations/ads/ad-score';
-import { SupplierOffer } from '../integrations/types';
+import { computeImpulseSignal, ImpulseSignal } from './impulse-filter';
 import { Product } from './product.entity';
+import {
+  hasAnySupplier,
+  hasViableSupplier,
+  liveSuppliers,
+} from './supplier-signals';
 
 /**
  * Drop Sniper Score 0–100:
- * 25% Amazon momentum (7d + 30d)
- * 20% Amazon demand
- * 20% Ad Score (0 if no live ads)
- * 10% AliExpress / Alibaba market signal
- * 20% supplier + margin
- * 5% competition
+ * 20% Amazon momentum (7d + 30d)
+ * 15% Amazon demand
+ * 28% Ad Score (0 if no live ads) — ads are the primary discovery radar
+ * 12% AliExpress / Alibaba market signal
+ * 12% supplier + margin (sourceability itself is a hard board-inclusion gate,
+ *     see hasAnySupplier — this weight is about margin quality, not presence)
+ * 3% competition
+ * 10% impulse-product quality read (informational signal, see impulse-filter.ts)
  * + agreement bonus 0–10 when independent sources agree
  */
+
+export { hasAnySupplier, hasViableSupplier, liveSuppliers };
 
 export type AeMarketSignal = {
   total: number;
@@ -19,6 +28,12 @@ export type AeMarketSignal = {
   liveCount: number;
   kind: 'estimated' | 'unavailable';
 };
+
+export type ProductTier =
+  | 'early_winner'
+  | 'proven_winner'
+  | 'saturated'
+  | 'unclassified';
 
 export type DropSniperBreakdown = {
   total: number;
@@ -30,8 +45,14 @@ export type DropSniperBreakdown = {
   aliexpress: number;
   amazon: number;
   agreement: number;
+  impulse: number;
   viable: boolean;
+  sourceable: boolean;
   liveSupplierCount: number;
+  tier: ProductTier;
+  tierReasons: string[];
+  badges: { amazon: boolean; ads: boolean; aliexpress: boolean };
+  impulseSignal: ImpulseSignal;
   /** @deprecated use ads; kept for older snapshots */
   crossBonus: number;
 };
@@ -41,13 +62,39 @@ const AE_STRONG = 35;
 const AMAZON_STRONG_DEMAND = 35;
 const AMAZON_STRONG_MOMENTUM = 30;
 
-function clamp(n: number, lo = 0, hi = 100) {
-  return Math.max(lo, Math.min(hi, n));
+/**
+ * Tier-classification thresholds — calibrated against a real draft ingest
+ * (2026-W39, ES). One data-availability finding from that run: PipiAds
+ * essentially never returns an advertiser/brand name for TikTok ads here,
+ * so `computeAdClusterScore`'s `advertiserCount` floors to 1 for nearly
+ * every real cluster — gating early_winner on `advertiserCount >= 2` alone
+ * made the tier unreachable for any Ad-Winners-sourced product. `hasBreadth()`
+ * below falls back to creative-count (distinct ad clips found) as a weaker
+ * substitute signal when advertiser identity isn't available.
+ */
+const EARLY_WINNER_ADS_MIN = AD_STRONG;
+const EARLY_WINNER_ADVERTISERS_MIN = 2;
+const EARLY_WINNER_CREATIVE_FALLBACK_MIN = 3;
+const PROVEN_WINNER_ADVERTISERS_MIN = 3;
+const PROVEN_WINNER_CREATIVE_FALLBACK_MIN = 5;
+const SATURATED_ADVERTISERS_MIN = 6;
+const SATURATED_DURATION_MIN = 70;
+const SATURATED_REVIEWS_MIN = 5000;
+
+function hasBreadth(cluster: AdClusterScore | undefined, advertiserMin: number, creativeFallbackMin: number) {
+  const advertiserCount = cluster?.advertiserCount ?? 0;
+  if (advertiserCount >= advertiserMin) return true;
+  // No real advertiser-name data (advertiserCount stuck at the ≤1 fallback) —
+  // use creative-count as a weaker "breadth" proxy instead of blocking the
+  // tier outright.
+  if (advertiserCount <= 1) {
+    return (cluster?.creativeCount ?? 0) >= creativeFallbackMin;
+  }
+  return false;
 }
 
-function liveSuppliers(p: Product): SupplierOffer[] {
-  const list = (p.meta?.suppliers as SupplierOffer[] | undefined) ?? [];
-  return list.filter((s) => s.kind === 'live' && s.unitPriceEur != null);
+function clamp(n: number, lo = 0, hi = 100) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
 function keepaRaw(p: Product): Record<string, unknown> {
@@ -59,17 +106,8 @@ function numMeta(p: Product, key: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Min margin % and at least one live offer to enter opportunity boards. */
-export function hasViableSupplier(
-  p: Product,
-  minMarginPct = 8,
-): boolean {
-  const live = liveSuppliers(p);
-  if (!live.length) return false;
-  const salePrice = Number(p.currentPrice ?? 0);
-  if (!(salePrice > 0)) return true;
-  const margin = Number(p.estimatedMarginPct ?? 0);
-  return Number.isFinite(margin) && margin >= minMarginPct;
+function adClusterMeta(p: Product): AdClusterScore | undefined {
+  return p.meta?.adScore as AdClusterScore | undefined;
 }
 
 function growth7(p: Product): number {
@@ -169,49 +207,6 @@ function agreementBonus(
   return 0;
 }
 
-export function computeDropSniperScore(p: Product): DropSniperBreakdown {
-  const liveSupplierCount = liveSuppliers(p).length;
-  const viable = hasViableSupplier(p);
-  const momentum = scoreMomentum(p);
-  const demand = scoreDemand(p);
-  const supplier = scoreSupplier(p);
-  const competition = scoreCompetition(p);
-  const ads = productAdScore(p);
-  const aeSignal = computeAliExpressMarketSignal(p);
-  const aliexpress = aeSignal.total;
-  const amazon = clamp(momentum * 0.56 + demand * 0.44);
-  const amazonStrong =
-    demand >= AMAZON_STRONG_DEMAND || momentum >= AMAZON_STRONG_MOMENTUM;
-  const agreement = agreementBonus(amazonStrong, ads, aliexpress);
-
-  // `viable` (real proveedor live) solo importa para margen/beneficio — un
-  // producto sin proveedor confirmado todavía puede ser trending/winner por
-  // señal Amazon pura. supplier/aliexpress ya salen en 0 sin oferta live.
-  const weighted =
-    momentum * 0.25 +
-    demand * 0.2 +
-    ads * 0.2 +
-    aliexpress * 0.1 +
-    supplier * 0.2 +
-    competition * 0.05 +
-    agreement;
-
-  return {
-    total: Number(clamp(weighted).toFixed(2)),
-    momentum: Number(momentum.toFixed(2)),
-    demand: Number(demand.toFixed(2)),
-    supplier: Number(supplier.toFixed(2)),
-    competition: Number(competition.toFixed(2)),
-    ads: Number(ads.toFixed(2)),
-    aliexpress: Number(aliexpress.toFixed(2)),
-    amazon: Number(amazon.toFixed(2)),
-    agreement,
-    viable,
-    liveSupplierCount,
-    crossBonus: Number(ads.toFixed(2)),
-  };
-}
-
 /**
  * TRENDING: 7d and/or 30d growth — not necessarily top demand. Pure Amazon
  * momentum signal; no live supplier required (that's an opportunity-board
@@ -242,4 +237,125 @@ export function sourceBadges(sniper: DropSniperBreakdown): {
     ads: sniper.ads >= 28,
     aliexpress: sniper.aliexpress >= 25 && sniper.aliexpress > 0,
   };
+}
+
+/**
+ * Product lifecycle tier — Early Winner (ads-strong, Amazon can be absent),
+ * Proven Winner (ads + confirmed Amazon demand), Saturated (huge ad/Amazon
+ * presence — deprioritized in sort order + labeled, never hard-excluded).
+ * Thresholds are a first pass; need calibration against a real draft ingest.
+ */
+export function computeProductTier(
+  p: Product,
+  sniper: Pick<DropSniperBreakdown, 'ads' | 'demand'>,
+): { tier: ProductTier; reasons: string[] } {
+  const cluster = adClusterMeta(p);
+  const advertiserCount = cluster?.advertiserCount ?? 0;
+  const duration = cluster?.duration ?? 0;
+  const reviews = Number(p.reviewCount ?? 0);
+  const sourceable = hasAnySupplier(p);
+
+  const saturated =
+    advertiserCount >= SATURATED_ADVERTISERS_MIN &&
+    duration >= SATURATED_DURATION_MIN &&
+    reviews >= SATURATED_REVIEWS_MIN;
+  if (saturated) {
+    return {
+      tier: 'saturated',
+      reasons: [
+        `${advertiserCount} anunciantes independientes, anuncios de larga duración y ${reviews} reseñas en Amazon: mercado ya consolidado.`,
+      ],
+    };
+  }
+
+  const adsStrong = sniper.ads >= EARLY_WINNER_ADS_MIN;
+  const multiAdvertiser = hasBreadth(
+    cluster,
+    EARLY_WINNER_ADVERTISERS_MIN,
+    EARLY_WINNER_CREATIVE_FALLBACK_MIN,
+  );
+  if (adsStrong && multiAdvertiser && sourceable) {
+    const fullSniper = sniper as DropSniperBreakdown;
+    const proven =
+      hasBreadth(cluster, PROVEN_WINNER_ADVERTISERS_MIN, PROVEN_WINNER_CREATIVE_FALLBACK_MIN) &&
+      isWinnerCandidate(p, fullSniper);
+    if (proven) {
+      return {
+        tier: 'proven_winner',
+        reasons: [
+          `${advertiserCount} anunciantes independientes en anuncios + demanda sostenida confirmada en Amazon.`,
+        ],
+      };
+    }
+    return {
+      tier: 'early_winner',
+      reasons: [
+        `Aparece en ${advertiserCount} anunciantes independientes de TikTok/Meta con proveedor disponible${
+          p.currentRank ? '' : ' y todavía sin presencia en Amazon'
+        }.`,
+      ],
+    };
+  }
+
+  return { tier: 'unclassified', reasons: [] };
+}
+
+export function computeDropSniperScore(p: Product): DropSniperBreakdown {
+  const liveSupplierCount = liveSuppliers(p).length;
+  const viable = hasViableSupplier(p);
+  const sourceable = hasAnySupplier(p);
+  const momentum = scoreMomentum(p);
+  const demand = scoreDemand(p);
+  const supplier = scoreSupplier(p);
+  const competition = scoreCompetition(p);
+  const ads = productAdScore(p);
+  const aeSignal = computeAliExpressMarketSignal(p);
+  const aliexpress = aeSignal.total;
+  const impulseSignal = computeImpulseSignal(p);
+  const impulse = impulseSignal.score;
+  const amazon = clamp(momentum * 0.56 + demand * 0.44);
+  const amazonStrong =
+    demand >= AMAZON_STRONG_DEMAND || momentum >= AMAZON_STRONG_MOMENTUM;
+  const agreement = agreementBonus(amazonStrong, ads, aliexpress);
+
+  // `viable` (real proveedor live + margin) solo importa para margen/beneficio.
+  // `sourceable` (cualquier proveedor live) es un requisito duro para TODOS los
+  // tableros a nivel de products.service.ts — acá solo se reporta, no se gatea.
+  const weighted =
+    momentum * 0.2 +
+    demand * 0.15 +
+    ads * 0.28 +
+    aliexpress * 0.12 +
+    supplier * 0.12 +
+    competition * 0.03 +
+    impulse * 0.1 +
+    agreement;
+
+  const breakdown: DropSniperBreakdown = {
+    total: Number(clamp(weighted).toFixed(2)),
+    momentum: Number(momentum.toFixed(2)),
+    demand: Number(demand.toFixed(2)),
+    supplier: Number(supplier.toFixed(2)),
+    competition: Number(competition.toFixed(2)),
+    ads: Number(ads.toFixed(2)),
+    aliexpress: Number(aliexpress.toFixed(2)),
+    amazon: Number(amazon.toFixed(2)),
+    agreement,
+    impulse: Number(impulse.toFixed(2)),
+    viable,
+    sourceable,
+    liveSupplierCount,
+    tier: 'unclassified',
+    tierReasons: [],
+    badges: { amazon: false, ads: false, aliexpress: false },
+    impulseSignal,
+    crossBonus: Number(ads.toFixed(2)),
+  };
+
+  breakdown.badges = sourceBadges(breakdown);
+  const tierResult = computeProductTier(p, breakdown);
+  breakdown.tier = tierResult.tier;
+  breakdown.tierReasons = tierResult.reasons;
+
+  return breakdown;
 }

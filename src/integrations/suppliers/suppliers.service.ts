@@ -37,6 +37,17 @@ export class SuppliersService {
     this.alibabaCom.resetRunBudget();
   }
 
+  /**
+   * Identify candidate products from a photo alone (no title yet) — only
+   * Alibaba.com/Otapi supports image search; AliExpress is keyword-only.
+   */
+  async identifyByImage(imageUrl: string, limit = 5): Promise<SupplierOffer[]> {
+    return this.alibabaCom.searchByImageOnly(imageUrl, limit).catch((err) => {
+      this.logger.warn(`Alibaba.com image identify: ${err}`);
+      return [] as SupplierOffer[];
+    });
+  }
+
   async findRelated(
     productTitle: string,
     limit = 6,

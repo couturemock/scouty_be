@@ -25,6 +25,7 @@ import { Product } from './product.entity';
 import {
   computeAliExpressMarketSignal,
   computeDropSniperScore,
+  hasAnySupplier,
   hasViableSupplier,
   isTrendingCandidate,
   isWinnerCandidate,
@@ -504,19 +505,20 @@ export class ProductsService {
       await this.products.save(p);
     }
 
-    // General/Trending/Winners/categoría/país: señal Amazon pura, no exige
-    // proveedor live confirmado (eso agotaba categorías enteras cuando
-    // AliExpress/Alibaba se quedaban sin cuota a mitad de la ingesta).
-    const amazonProducts = products.filter((p) =>
-      (p.sources ?? []).includes('amazon'),
-    );
-    // Margen/beneficio sí necesitan un costo real: solo con proveedor live.
-    const opportunities = amazonProducts.filter((p) => hasViableSupplier(p));
-    const bySniper = [...amazonProducts].sort(
+    // Every board (general/trending/winners/categoría/país, not just
+    // margin/profit) now requires the product to be sourceable on
+    // AliExpress/Alibaba — every product shown must be findable there. This
+    // also makes ads-origin products (no Amazon match, from AdWinnersService)
+    // eligible for general/trending/winners for the first time, not just the
+    // ad_winners scope.
+    const sourceableProducts = products.filter((p) => hasAnySupplier(p));
+    // Margen/beneficio además necesitan margen real, no solo un proveedor live.
+    const opportunities = sourceableProducts.filter((p) => hasViableSupplier(p));
+    const bySniper = [...sourceableProducts].sort(
       (a, b) => this.dropSniperTotal(b) - this.dropSniperTotal(a),
     );
     this.logger.log(
-      `Rankings week=${weekKey}: products=${products.length} amazon=${amazonProducts.length} withSupplier=${opportunities.length} trending≈…`,
+      `Rankings week=${weekKey}: products=${products.length} sourceable=${sourceableProducts.length} withMargin=${opportunities.length} trending≈…`,
     );
 
     const writeBoard = async (
@@ -549,7 +551,7 @@ export class ProductsService {
       10,
     );
 
-    const trending = amazonProducts
+    const trending = sourceableProducts
       .filter((p) =>
         isTrendingCandidate(p, computeDropSniperScore(p)),
       )
@@ -580,7 +582,7 @@ export class ProductsService {
       10,
     );
 
-    const winners = amazonProducts
+    const winners = sourceableProducts
       .filter((p) => isWinnerCandidate(p, computeDropSniperScore(p)))
       .sort((a, b) => this.dropSniperTotal(b) - this.dropSniperTotal(a));
     await writeBoard(
@@ -629,7 +631,7 @@ export class ProductsService {
       for (const label of labels) categoryKeys.add(label);
     }
     // Also include any ingest category seen on products (safety)
-    for (const p of amazonProducts) {
+    for (const p of sourceableProducts) {
       const cats = (p.meta?.ingestCategories as string[] | undefined) ?? [
         p.category,
       ];
@@ -637,7 +639,7 @@ export class ProductsService {
     }
 
     for (const category of categoryKeys) {
-      const list = amazonProducts
+      const list = sourceableProducts
         .filter((p) => {
           const cats = (p.meta?.ingestCategories as string[] | undefined) ?? [
             p.category,
@@ -695,10 +697,16 @@ export class ProductsService {
     market?: string,
     limit = 40,
     view: CatalogView = 'published',
+    options: { requireSupplier?: boolean } = {},
   ) {
     const weekKey = await this.resolveWeekKey(view);
     const rows = await this.productsForWeek(weekKey, market);
-    return [...rows]
+    // Same sourceability gate as rebuildRankings — used by RankingsService's
+    // empty-board fallback so it doesn't silently bypass the supplier gate.
+    const filtered = options.requireSupplier
+      ? rows.filter((p) => hasAnySupplier(p))
+      : rows;
+    return [...filtered]
       .sort((a, b) => this.scoreProduct(b) - this.scoreProduct(a))
       .slice(0, limit)
       .map((p, index) => ({

@@ -75,6 +75,12 @@ export interface AmazonProvider {
     query: string,
     marketCode?: string,
   ): Promise<CommercialSignal | null>;
+  /** Free-text/keyword product search (e.g. a candidate title found via image search). */
+  searchByKeyword?(
+    term: string,
+    marketCode?: string,
+    limit?: number,
+  ): Promise<CommercialSignal[]>;
 }
 
 export interface TikTokShopProvider {

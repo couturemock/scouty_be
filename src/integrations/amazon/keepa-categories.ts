@@ -4,6 +4,22 @@
  *
  * IDs: Keepa-proven nodes already in production stay; new nodes from Amazon browse trees
  * (browsenodes.com). Invalid IDs are skipped at ingest with a warning.
+ *
+ * `CANONICAL_CATEGORY_KEYS` is the full reference set (kept for typing/backward
+ * compatibility and as a denylist cross-check — e.g. `health` matters for catching
+ * stray medical items even though it's not an ingest priority). Only
+ * `PRIORITY_CATEGORY_KEYS` is actually swept at ingest time — see
+ * `keepaCategoriesForMarket()`. Big-brand-electronics/computers/clothing/jewelry/
+ * watches were dropped as ingest priorities (Drop Sniper is dropshipping-focused,
+ * not general Amazon bestsellers) but keys stay typed in case they're needed again.
+ *
+ * `home_decor`, `storage_organization` and `hobbies_crafts` are priority categories
+ * from the product spec that have NO confirmed Keepa browse-node id yet in any
+ * market — Amazon nests these under home_kitchen's own sub-tree rather than
+ * exposing a distinct top-level bestseller node. They stay in the type as
+ * documented gaps (omitted from every market in BY_MARKET) pending research;
+ * until then, matching products can only be recovered client-side via each
+ * product's own `categoryTree` breadcrumb, not via bestseller-list discovery.
  */
 
 export const CANONICAL_CATEGORY_KEYS = [
@@ -26,9 +42,34 @@ export const CANONICAL_CATEGORY_KEYS = [
   'watches',
   'luggage',
   'lighting',
+  'home_decor',
+  'storage_organization',
+  'hobbies_crafts',
 ] as const;
 
 export type CanonicalCategoryKey = (typeof CANONICAL_CATEGORY_KEYS)[number];
+
+/**
+ * Priority categories actually used to drive ingest (Drop Sniper's dropshipping
+ * focus): home, kitchen, beauty tools/devices, pets accessories, sports/fitness
+ * accessories, car accessories, garden, DIY, office, travel (luggage), lighting,
+ * toys/hobby-adjacent generic gadgets. `health` is intentionally excluded here
+ * (stays only as a denylist cross-check) — big-brand electronics/computers/
+ * clothing/shoes/jewelry/watches/accessories are excluded entirely.
+ */
+export const PRIORITY_CATEGORY_KEYS = [
+  'home_kitchen',
+  'beauty',
+  'pets',
+  'sports',
+  'automotive',
+  'garden',
+  'diy',
+  'office',
+  'luggage',
+  'lighting',
+  'toys',
+] as const satisfies readonly CanonicalCategoryKey[];
 
 export type KeepaCategoryNode = {
   id: number;
@@ -186,7 +227,7 @@ export function keepaCategoriesForMarket(marketCode?: string): KeepaCategoryNode
   const code = (marketCode ?? 'ES').toUpperCase();
   const map = BY_MARKET[code] ?? BY_MARKET.ES ?? {};
   const nodes: KeepaCategoryNode[] = [];
-  for (const key of CANONICAL_CATEGORY_KEYS) {
+  for (const key of PRIORITY_CATEGORY_KEYS) {
     const node = map[key];
     if (node) nodes.push({ ...node, key });
   }

@@ -2,17 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SupplierOffer } from '../types';
 import { supplierSearchKeywords } from './search-keywords';
+import { isLikelyBranded } from '../shared/brand-denylist';
 
 type AeProduct = Record<string, unknown>;
 
 function round2(n: number) {
   return Number(n.toFixed(2));
-}
-
-function isLikelyBranded(title: string) {
-  return /\b(apple|samsung|sony|nike|adidas|dyson|lego|microsoft|bose|canon|nikon|hp|dell|lenovo|asus|macbook|iphone|ipad)\b/i.test(
-    title,
-  );
 }
 
 function shipToForMarket(market?: string) {

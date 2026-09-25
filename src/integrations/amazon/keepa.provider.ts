@@ -509,6 +509,40 @@ export class KeepaAmazonProvider implements AmazonProvider {
     return products[0] ?? null;
   }
 
+  /**
+   * Free-text search (Keepa's own Amazon-search-backed `/search` endpoint).
+   * Used to resolve a candidate title (e.g. from an image search on a
+   * supplier) into real Amazon products — unlike lookupByAsinOrUrl, no ASIN
+   * needs to be present in the input.
+   */
+  async searchByKeyword(
+    term: string,
+    marketCode = 'ES',
+    limit = 5,
+  ): Promise<CommercialSignal[]> {
+    const market = this.marketFromCode(marketCode);
+    const query = term.trim().slice(0, 100);
+    if (!query) return [];
+
+    if (!this.enabled()) {
+      const q = query.toLowerCase();
+      return FIXTURE_AMAZON_SIGNALS.filter(
+        (s) => s.country === market.code && s.title.toLowerCase().includes(q),
+      ).slice(0, limit);
+    }
+
+    const data = await this.keepaGet(
+      `/search?domain=${market.keepaDomain}&type=product&term=${encodeURIComponent(query)}`,
+    );
+    const asins = (data.products ?? [])
+      .map((p) => p.asin)
+      .filter((a): a is string => Boolean(a))
+      .slice(0, Math.max(limit, 5));
+    if (!asins.length) return [];
+
+    return (await this.fetchProducts(asins, market)).slice(0, limit);
+  }
+
   async getStatus() {
     const defaultPerCategory = this.perCategoryLimit();
     const configuredMarkets = this.marketsToIngest();
