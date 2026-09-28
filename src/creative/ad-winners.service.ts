@@ -7,10 +7,12 @@ import {
   computeAdClusterScore,
   normalizeAdProductKey,
 } from '../integrations/ads/ad-score';
+import { productQueryTokens } from '../integrations/ads/ad-engagement';
+import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
 import { PipiAdsProvider } from '../integrations/pipiads/pipiads.provider';
 import { offerMatchesSeed } from '../integrations/suppliers/offer-relevance';
 import { SuppliersService } from '../integrations/suppliers/suppliers.service';
-import { CreativeAd, SupplierOffer } from '../integrations/types';
+import { CreativeAd, CommercialSignal, SupplierOffer } from '../integrations/types';
 import { RankingEntry } from '../rankings/ranking-entry.entity';
 import { Product } from '../products/product.entity';
 
@@ -78,6 +80,7 @@ export class AdWinnersService {
     private readonly config: ConfigService,
     private readonly pipiads: PipiAdsProvider,
     private readonly suppliers: SuppliersService,
+    private readonly amazon: KeepaAmazonProvider,
     @InjectRepository(Product) private readonly products: Repository<Product>,
     @InjectRepository(RankingEntry)
     private readonly rankings: Repository<RankingEntry>,
@@ -103,6 +106,90 @@ export class AdWinnersService {
     const t = title.replace(/[\u{1F300}-\u{1FAFF}]/gu, '').trim();
     if (t.length >= 8) return t.slice(0, 120);
     return seed.slice(0, 120);
+  }
+
+  /**
+   * Client-requested step: once ads point at a candidate product, actively
+   * search Amazon for that *same* product (Keepa's own search endpoint) —
+   * not just a lookup against whatever the weekly Keepa bestseller sweep
+   * already ingested. Amazon here is the final verification step, not the
+   * discovery source.
+   */
+  private async searchAmazonForCluster(
+    cluster: { title: string; seed: string },
+    market: string,
+    weekKey: string,
+  ): Promise<Product | null> {
+    const base =
+      cluster.title && cluster.title.length >= 8 ? cluster.title : cluster.seed;
+    const tokens = productQueryTokens(base).slice(0, 6);
+    const term = (tokens.length ? tokens.join(' ') : base).slice(0, 80);
+    if (!term) return null;
+
+    let signal: CommercialSignal | null = null;
+    try {
+      const found = await this.amazon.searchByKeyword(term, market, 3);
+      signal = found[0] ?? null;
+    } catch (err) {
+      this.logger.warn(`Ad Winners Keepa verify "${term}": ${err}`);
+      return null;
+    }
+    if (!signal) return null;
+
+    const slug = `${market.toLowerCase()}-${signal.externalId.toLowerCase()}-${weekKey
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')}`.slice(0, 80);
+
+    const product =
+      (await this.products.findOne({
+        where: {
+          amazonAsin: signal.externalId,
+          country: market,
+          catalogWeekKey: weekKey,
+        },
+      })) ??
+      (await this.products.findOne({ where: { slug } })) ??
+      this.products.create({ slug, title: signal.title });
+
+    product.slug = slug;
+    product.title = signal.title;
+    product.imageUrl = signal.imageUrl ?? product.imageUrl ?? null;
+    product.category = signal.category ?? product.category ?? 'Ad Winners';
+    product.country = market;
+    product.amazonAsin = signal.externalId;
+    product.catalogWeekKey = weekKey;
+    product.currentPrice =
+      signal.price != null ? String(signal.price) : product.currentPrice ?? null;
+    product.currentRank = signal.rank ?? product.currentRank ?? null;
+    product.estimatedSales =
+      signal.estimatedSales != null
+        ? String(signal.estimatedSales)
+        : product.estimatedSales ?? null;
+    product.estimatedSalesKind =
+      signal.estimatedSalesKind ?? product.estimatedSalesKind;
+    product.growthPct =
+      signal.growthPct != null
+        ? String(signal.growthPct)
+        : product.growthPct ?? null;
+    product.brand = signal.brand ?? product.brand ?? null;
+    product.rating =
+      signal.rating != null ? String(signal.rating) : product.rating ?? null;
+    product.reviewCount = signal.reviewCount ?? product.reviewCount ?? null;
+    product.amazonUrl = signal.amazonUrl ?? product.amazonUrl ?? null;
+    product.description = signal.description ?? product.description ?? null;
+
+    const existingMeta =
+      product.meta && typeof product.meta === 'object' ? product.meta : {};
+    product.meta = {
+      ...existingMeta,
+      keepa: {
+        ...((signal.raw as Record<string, unknown> | undefined) ?? {}),
+        growthPct7: signal.growthPct7 ?? null,
+        growthPct30: signal.growthPct30 ?? null,
+      },
+    };
+
+    return product;
   }
 
   async runForWeek(weekKey: string, country = 'ES') {
@@ -283,7 +370,18 @@ export class AdWinnersService {
 
     let ranked = 0;
     for (const [index, row] of top.entries()) {
-      const amazonHit = matchAmazon(row.cluster);
+      let amazonHit = matchAmazon(row.cluster);
+      let verifiedLive = false;
+      if (!amazonHit) {
+        // No match in this week's already-ingested Keepa bestsellers — actively
+        // search Amazon for this same ad-detected product instead of giving up.
+        amazonHit = await this.searchAmazonForCluster(
+          row.cluster,
+          market,
+          weekKey,
+        );
+        verifiedLive = Boolean(amazonHit);
+      }
       let product: Product;
 
       if (amazonHit) {
@@ -298,13 +396,15 @@ export class AdWinnersService {
           adClusterKey: row.cluster.key,
           adSeed: row.cluster.seed,
           hasLiveSupplier: row.hasLive,
+          amazonVerifiedLive: verifiedLive,
           creativeIntelligence: {
             ads: row.cluster.ads.slice(0, 12),
             provider: 'pipiads',
             fetchedAt: new Date().toISOString(),
             fromSnapshot: true,
-            disclaimer:
-              'Ads cruzados con ASIN Amazon: duración, advertisers, engagement. No son ventas Amazon.',
+            disclaimer: verifiedLive
+              ? 'Producto detectado por anuncios (TikTok/Meta) y verificado en Amazon vía búsqueda Keepa en vivo: duración, advertisers, engagement. No son ventas Amazon reales.'
+              : 'Ads cruzados con ASIN Amazon: duración, advertisers, engagement. No son ventas Amazon.',
           },
         });
         try {

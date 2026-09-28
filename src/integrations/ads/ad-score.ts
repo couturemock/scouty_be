@@ -17,6 +17,10 @@ export type AdClusterScore = {
   spend: number;
   creativeCount: number;
   advertiserCount: number;
+  /** Distinct platforms seen for this cluster (e.g. ['tiktok', 'facebook']). */
+  platforms: string[];
+  /** True when the same product is running on TikTok AND Meta (FB/IG) at once. */
+  crossPlatform: boolean;
 };
 
 function clamp(n: number, lo = 0, hi = 100) {
@@ -74,8 +78,21 @@ export function computeAdClusterScore(
   // Spend is noisy — low weight
   const spend = clamp(Math.log10(totalSpend + 1) * 15);
 
+  // Same product advertised on TikTok AND Meta at once is a stronger signal
+  // than either alone (client-requested cross-check) — small flat bonus.
+  const platforms = [
+    ...new Set(ads.map((ad) => ad.platform).filter((p): p is string => Boolean(p))),
+  ];
+  const hasTikTok = platforms.includes('tiktok');
+  const hasMeta = platforms.some((p) => p === 'facebook' || p === 'instagram');
+  const crossPlatform = hasTikTok && hasMeta;
+
   const total = clamp(
-    duration * 0.35 + advertisers * 0.3 + engagement * 0.25 + spend * 0.1,
+    duration * 0.35 +
+      advertisers * 0.3 +
+      engagement * 0.25 +
+      spend * 0.1 +
+      (crossPlatform ? 8 : 0),
   );
 
   return {
@@ -86,5 +103,7 @@ export function computeAdClusterScore(
     spend: Number(spend.toFixed(2)),
     creativeCount,
     advertiserCount,
+    platforms,
+    crossPlatform,
   };
 }
