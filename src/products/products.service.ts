@@ -390,37 +390,70 @@ export class ProductsService {
       `Snapshot ${weekKey} guardado · ${products.length} productos · markets=${(markets ?? []).join(',') || 'default'}`,
     );
 
-    // CI can take many minutes; do not block the HTTP response or the admin UI
-    // never refreshes (looks like the ingest "failed" / snapshot missing).
+    // Awaited (not fire-and-forget): this whole method only runs inside the
+    // BullMQ worker (IngestionProcessor) or the one-time fixture seed, never
+    // on the HTTP request path — the /admin/catalog/ingest endpoint returns
+    // as soon as the job is enqueued. A detached `.then()` here used to let
+    // the job report "done" right after Keepa saved, while CI + Ad Winners
+    // kept running loose in the process; a worker restart/redeploy during
+    // that multi-minute window silently dropped them with no retry and no
+    // ad_winners rows ever written. Awaiting keeps it one durable job: if the
+    // worker dies mid-run, BullMQ sees the job as incomplete and can retry
+    // the whole thing instead of quietly losing the second half forever.
     const ciTopN = options?.ciTopN;
     const ingestMarkets = markets ?? [];
-    void this.creativeIntelligence
-      .enrichTopProductsAtIngest(weekKey, (p) => this.scoreProduct(p), ciTopN)
-      .then(async (ci) => {
-        this.logger.log(
-          `CI PipiAds listo week=${weekKey} enriched=${ci.enriched}/${ci.topN} credits≈${ci.totalCredits}`,
-        );
-        // Re-score with Ad Score after CI attaches creatives
-        await this.rebuildRankings(weekKey);
-        const adMarkets = (
-          ingestMarkets.length ? ingestMarkets : ['ES']
-        ).slice(0, 2);
-        for (const m of adMarkets) {
-          try {
-            const ad = await this.adWinners.runForWeek(weekKey, m);
-            this.logger.log(
-              `Ad Winners ${m} week=${weekKey} ranked=${ad.ranked} credits≈${ad.credits}`,
-            );
-          } catch (err) {
-            this.logger.warn(`Ad Winners ${m} falló: ${err}`);
-          }
-        }
-        // Ad Winners may attach ads onto Amazon ASINs — refresh Drop Sniper
-        await this.rebuildRankings(weekKey);
-      })
-      .catch((err) => {
-        this.logger.warn(`CI PipiAds falló week=${weekKey}: ${err}`);
+    const onProgress = options?.onProgress;
+    let ci = { enriched: 0, topN: 0, totalCredits: 0 };
+    try {
+      onProgress?.({
+        market: ingestMarkets[0] ?? 'ALL',
+        step: 'creative-intelligence',
+        categoriesDone: 0,
+        categoriesTotal: 1,
+        callsDone: 0,
+        elapsedMs: 0,
+        etaSeconds: null,
       });
+      ci = await this.creativeIntelligence.enrichTopProductsAtIngest(
+        weekKey,
+        (p) => this.scoreProduct(p),
+        ciTopN,
+      );
+      this.logger.log(
+        `CI PipiAds listo week=${weekKey} enriched=${ci.enriched}/${ci.topN} credits≈${ci.totalCredits}`,
+      );
+      // Re-score with Ad Score after CI attaches creatives
+      await this.rebuildRankings(weekKey);
+    } catch (err) {
+      this.logger.warn(`CI PipiAds falló week=${weekKey}: ${err}`);
+    }
+
+    const adMarkets = (ingestMarkets.length ? ingestMarkets : ['ES']).slice(0, 2);
+    let adWinnersRanked = 0;
+    let adWinnersCredits = 0;
+    for (const [i, m] of adMarkets.entries()) {
+      try {
+        onProgress?.({
+          market: m,
+          step: 'ad-winners',
+          categoriesDone: i,
+          categoriesTotal: adMarkets.length,
+          callsDone: 0,
+          elapsedMs: 0,
+          etaSeconds: null,
+        });
+        const ad = await this.adWinners.runForWeek(weekKey, m);
+        adWinnersRanked += ad.ranked;
+        adWinnersCredits += ad.credits;
+        this.logger.log(
+          `Ad Winners ${m} week=${weekKey} ranked=${ad.ranked} credits≈${ad.credits}`,
+        );
+      } catch (err) {
+        this.logger.warn(`Ad Winners ${m} falló: ${err}`);
+      }
+    }
+    // Ad Winners may attach ads onto Amazon ASINs — refresh Drop Sniper
+    await this.rebuildRankings(weekKey);
 
     return {
       weekKey,
@@ -430,16 +463,20 @@ export class ProductsService {
       provider: this.amazon.enabled() ? 'keepa' : 'fixture',
       status: 'draft',
       creativeIntelligence: {
-        enriched: 0,
-        totalCredits: 0,
+        enriched: ci.enriched,
+        totalCredits: ci.totalCredits,
         topN:
           ciTopN != null && Number.isFinite(ciTopN) && ciTopN > 0
             ? Math.min(Math.floor(ciTopN), 200)
             : 60,
-        running: true,
+        running: false,
+      },
+      adWinners: {
+        ranked: adWinnersRanked,
+        credits: adWinnersCredits,
       },
       message:
-        'Ingesta Keepa guardada. CI + Ad Winners siguen en segundo plano; publicá el weekKey cuando termine. Se necesita ingesta nueva para Drop Sniper / TRENDING / WINNERS.',
+        'Ingesta completa: Keepa + CI + Ad Winners. Publicá el weekKey cuando quieras que salga en la web.',
     };
   }
 

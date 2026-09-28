@@ -27,8 +27,18 @@ export class IngestionProcessor extends WorkerHost {
       },
     });
     this.logger.log(
-      `Ingestion job ${job.id} done weekKey=${result.weekKey} count=${result.count}`,
+      `Ingestion job ${job.id} done weekKey=${result.weekKey} count=${result.count} ` +
+        `ci=${result.creativeIntelligence.enriched}/${result.creativeIntelligence.totalCredits}cr ` +
+        `adWinners=${result.adWinners.ranked}/${result.adWinners.credits}cr`,
     );
-    return { weekKey: result.weekKey, count: result.count };
+    return {
+      weekKey: result.weekKey,
+      count: result.count,
+      creativeIntelligence: {
+        enriched: result.creativeIntelligence.enriched,
+        totalCredits: result.creativeIntelligence.totalCredits,
+      },
+      adWinners: result.adWinners,
+    };
   }
 }
