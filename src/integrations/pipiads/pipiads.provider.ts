@@ -5,6 +5,10 @@ import {
   productQueryTokens,
   sortAdsByEngagement,
 } from '../ads/ad-engagement';
+import {
+  filterRealProductAds,
+  isAppPromotionAd,
+} from '../ads/ad-content-filters';
 import { resolveCreativeSourceUrl } from '../ads/creative-source-url';
 import { CreativeAd } from '../types';
 import { PipiAdsClient } from './pipiads.client';
@@ -335,5 +339,97 @@ export class PipiAdsProvider {
     }
 
     return { ads, creditsUsed };
+  }
+
+  /**
+   * Discovery mode: browse the top-performing ads for a market/platform
+   * WITHOUT a target product in mind (no `extend_keywords`), instead of
+   * searching for one of a handful of hand-picked seeds. This is what lets
+   * Ad Winners find products nobody typed in as a seed — the client-requested
+   * "watch the ads, see what's scaling" behaviour, not just "look up these 8
+   * known dropshipping products again".
+   *
+   * There is no `query` to score relevance against here (that's the whole
+   * point), so `filterAdsByRelevance` doesn't apply. Instead, `mapAd` results
+   * pass through `filterRealProductAds` — a keyword-less scan surfaces app
+   * installs, gambling, dating and political ads alongside real product ads,
+   * and none of those are useful for dropshipping regardless of how much
+   * engagement they have.
+   */
+  async discoverTopAds(
+    country: string,
+    limit = 40,
+    opts?: { pages?: number },
+  ): Promise<{ ads: CreativeAd[]; creditsUsed: number }> {
+    const region = this.regionForCountry(country);
+    const pages = Math.max(1, Math.min(opts?.pages ?? 2, 5));
+    const pageSize = Math.min(50, Math.max(20, Math.ceil(limit / pages)));
+
+    const fetchPlatform = async (plat_type: 1 | 2): Promise<RawAd[]> => {
+      const collected: RawAd[] = [];
+      for (let page = 1; page <= pages; page += 1) {
+        try {
+          const data = await this.client.call<unknown>(
+            '/v3/api/open/adspy/list',
+            {
+              current_page: page,
+              page_size: pageSize,
+              plat_type,
+              // No extend_keywords: browse the platform's top ads for this
+              // region instead of searching for a specific product.
+              region,
+              sort: 4,
+              sort_type: 'desc',
+            },
+          );
+          const list = this.extractList(data);
+          if (!list.length) break;
+          collected.push(...list);
+        } catch (err) {
+          this.logger.warn(
+            `PipiAds discovery plat_type=${plat_type} page=${page}: ${err}`,
+          );
+          break;
+        }
+      }
+      return collected;
+    };
+
+    const [tiktokRaw, metaRaw] = await Promise.all([
+      fetchPlatform(1),
+      fetchPlatform(2),
+    ]);
+
+    const creditsUsed = tiktokRaw.length + metaRaw.length;
+
+    // Drop app-install/in-app-content ads before mapping (mapAd doesn't
+    // carry app_id/data_type through to CreativeAd — see isAppPromotionAd).
+    const rawProducts = [...tiktokRaw, ...metaRaw].filter(
+      (r) => !isAppPromotionAd(r),
+    );
+    // mapAd already falls back to raw.desc/ad_copy/title internally.
+    const mapped = rawProducts.map((r) => this.mapAd(r, 'Producto', country));
+
+    const seen = new Set<string>();
+    const unique: CreativeAd[] = [];
+    for (const ad of mapped) {
+      const key =
+        String(ad.publicSignals?.videoId ?? '') ||
+        ad.sourceUrl ||
+        `${ad.platform}:${ad.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(ad);
+    }
+
+    const realProducts = filterRealProductAds(unique);
+    if (unique.length && !realProducts.length) {
+      this.logger.warn(
+        `PipiAds discovery: ${unique.length} ads found but all filtered as non-product (country=${country})`,
+      );
+    }
+
+    const ads = sortAdsByEngagement(realProducts).slice(0, limit);
+    return { ads, creditsUsed: creditsUsed || ads.length };
   }
 }
