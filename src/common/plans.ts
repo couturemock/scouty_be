@@ -17,15 +17,16 @@ export interface PlanDefinition {
 }
 
 /**
- * Básico y Pro son casi iguales (tops semanales, rankings, mercados, CI).
- * La diferencia principal: cupo de análisis por URL.
+ * Básico y Pro comparten el TOP 10 completo (ilimitado en ambos).
+ * La diferencia: cupo de análisis de productos propios por URL/imagen
+ * (20/mes en Básico, ilimitado en Pro).
  */
 export const PLANS: Record<PlanId, PlanDefinition> = {
   basic: {
     id: 'basic',
     name: 'Básico',
     monthlyEur: 39.99,
-    analysesPerMonth: 5,
+    analysesPerMonth: 20,
     creativeIntelligencePerMonth: null,
     rankingsViewsLifetime: null,
     top10General: true,
@@ -34,11 +35,11 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     countrySelection: true,
     creativeProposal: true,
     features: [
-      'Tops semanales y rankings (general, en alza, margen, ganancia)',
-      'Todos los marketplaces configurados',
-      '5 análisis de producto por URL al mes',
-      'Creative Intelligence',
-      'Calculadora, watchlist y proveedores',
+      'Acceso completo al TOP 10 de cada país: ventas, precio, BSR, valoraciones y más',
+      'Proveedores de AliExpress y Alibaba, con comparación de precios y envíos',
+      'Anuncios y creatividades de TikTok y Meta del TOP 10',
+      'Hasta 20 análisis de tus propios productos al mes, por URL o imagen',
+      'Calculadora de rentabilidad y productos guardados',
     ],
   },
   pro: {
@@ -54,11 +55,11 @@ export const PLANS: Record<PlanId, PlanDefinition> = {
     countrySelection: true,
     creativeProposal: true,
     features: [
-      'Tops semanales y rankings (general, en alza, margen, ganancia)',
-      'Todos los marketplaces configurados',
-      'Análisis URL ilimitados',
-      'Creative Intelligence',
-      'Calculadora, watchlist y proveedores',
+      'Todo lo del plan Básico, pero ilimitado',
+      'TOP 10 completo de cada país sin límites',
+      'Análisis ilimitados de tus propios productos, por URL o imagen',
+      'Proveedores, comparaciones de precios y anuncios ilimitados',
+      'Calculadora de rentabilidad y productos guardados ilimitados',
     ],
   },
 };

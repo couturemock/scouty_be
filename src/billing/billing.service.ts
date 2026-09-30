@@ -46,21 +46,30 @@ export class BillingService {
     return id;
   }
 
+  private async getOrCreateCustomer(
+    stripe: Stripe,
+    user: User,
+  ): Promise<string> {
+    if (user.stripeCustomerId) {
+      return user.stripeCustomerId;
+    }
+
+    const customer = await stripe.customers.create({
+      email: user.email,
+      name: user.name,
+      metadata: { userId: user.id },
+    });
+
+    user.stripeCustomerId = customer.id;
+    await this.users.save(user);
+
+    return customer.id;
+  }
+
   async createCheckoutSession(user: User, plan: PlanId) {
     const stripe = this.requireStripe();
     const appUrl = this.config.get<string>('APP_URL') ?? 'http://localhost:3000';
-
-    let customerId = user.stripeCustomerId;
-    if (!customerId) {
-      const customer = await stripe.customers.create({
-        email: user.email,
-        name: user.name,
-        metadata: { userId: user.id },
-      });
-      customerId = customer.id;
-      user.stripeCustomerId = customerId;
-      await this.users.save(user);
-    }
+    const customerId = await this.getOrCreateCustomer(stripe, user);
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -87,6 +96,210 @@ export class BillingService {
       return_url: `${appUrl}/cuenta`,
     });
     return { url: session.url };
+  }
+
+  /**
+   * Crea (o reactiva) una suscripción cobrando directamente con una tarjeta
+   * ya tokenizada en el cliente (Stripe Elements), en vez de redirigir a
+   * Stripe Checkout. `payment_behavior: default_incomplete` no lanza 402:
+   * devuelve la suscripción con latest_invoice.payment_intent para que el
+   * front resuelva 3DS/SCA con `stripe.confirmCardPayment`.
+   */
+  async createSubscription(
+    user: User,
+    plan: PlanId,
+    paymentMethodId: string,
+  ): Promise<{
+    subscriptionId: string;
+    clientSecret?: string;
+    status: string;
+  }> {
+    const stripe = this.requireStripe();
+    const priceId = this.priceId(plan);
+    const customerId = await this.getOrCreateCustomer(stripe, user);
+
+    try {
+      await stripe.paymentMethods.attach(paymentMethodId, {
+        customer: customerId,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (!message.includes('already been attached')) {
+        throw error;
+      }
+    }
+
+    await stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+
+    let subscription: Stripe.Subscription;
+    try {
+      subscription = await stripe.subscriptions.create({
+        customer: customerId,
+        items: [{ price: priceId }],
+        default_payment_method: paymentMethodId,
+        payment_behavior: 'default_incomplete',
+        payment_settings: {
+          payment_method_types: ['card'],
+          save_default_payment_method: 'on_subscription',
+        },
+        expand: ['latest_invoice.payment_intent'],
+        metadata: { userId: user.id, plan },
+      });
+    } catch (err: unknown) {
+      subscription = await this.recoverIncompleteSubscription(
+        stripe,
+        err,
+        customerId,
+        user.id,
+      );
+    }
+
+    const clientSecret = this.extractClientSecret(subscription);
+
+    this.applyLocalSubscriptionState(user, plan, subscription);
+    await this.users.save(user);
+
+    return {
+      subscriptionId: subscription.id,
+      clientSecret: clientSecret ?? undefined,
+      status: subscription.status,
+    };
+  }
+
+  private extractClientSecret(subscription: Stripe.Subscription): string | null {
+    const invoice = subscription.latest_invoice;
+    if (!invoice || typeof invoice === 'string') return null;
+    const paymentIntent = (
+      invoice as Stripe.Invoice & { payment_intent?: string | Stripe.PaymentIntent | null }
+    ).payment_intent;
+    if (!paymentIntent || typeof paymentIntent === 'string') return null;
+    return paymentIntent.client_secret ?? null;
+  }
+
+  /**
+   * En algunas versiones de la API, `subscriptions.create` con
+   * `default_incomplete` igual lanza `subscription_payment_intent_requires_action`
+   * sin devolver la suscripción creada. Stripe sí la creó del lado suyo: la
+   * recuperamos por el id que viene en el error, o si no, la más reciente en
+   * estado incomplete de ese cliente para este plan.
+   */
+  private async recoverIncompleteSubscription(
+    stripe: Stripe,
+    err: unknown,
+    customerId: string,
+    userId: string,
+  ): Promise<Stripe.Subscription> {
+    const raw = (err as { raw?: Record<string, unknown>; code?: string })?.raw ?? {};
+    const code = (err as { code?: string })?.code ?? (raw as { code?: string })?.code;
+    if (code !== 'subscription_payment_intent_requires_action') {
+      throw err;
+    }
+
+    const nested = (raw as { error?: Record<string, unknown> }).error;
+    const payload = nested && typeof nested === 'object' ? nested : raw;
+    const subRef = (payload as { subscription?: string | { id: string } })
+      .subscription;
+    let subscriptionId =
+      typeof subRef === 'string' ? subRef : (subRef?.id ?? null);
+
+    if (!subscriptionId) {
+      const list = await stripe.subscriptions.list({
+        customer: customerId,
+        status: 'incomplete',
+        limit: 10,
+      });
+      const match =
+        list.data.find((s) => s.metadata?.userId === userId) ?? list.data[0];
+      subscriptionId = match?.id ?? null;
+    }
+
+    if (!subscriptionId) {
+      throw new BadRequestException(
+        'El pago requiere confirmación adicional pero no se pudo continuar. Probá de nuevo o usá otra tarjeta.',
+      );
+    }
+
+    return stripe.subscriptions.retrieve(subscriptionId, {
+      expand: ['latest_invoice.payment_intent'],
+    });
+  }
+
+  private applyLocalSubscriptionState(
+    user: User,
+    plan: PlanId,
+    subscription: Stripe.Subscription,
+  ) {
+    user.plan = plan;
+    user.stripeSubscriptionId = subscription.id;
+    user.cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
+    user.subscriptionStatus =
+      subscription.status === 'trialing'
+        ? 'trialing'
+        : subscription.status === 'active'
+          ? 'active'
+          : subscription.status === 'past_due'
+            ? 'past_due'
+            : user.subscriptionStatus;
+
+    const periodEnd = (
+      subscription as Stripe.Subscription & { current_period_end?: number }
+    ).current_period_end;
+    if (periodEnd) {
+      user.currentPeriodEnd = new Date(periodEnd * 1000);
+    }
+  }
+
+  /**
+   * Tras `stripe.confirmCardPayment` en el cliente (3DS): releemos Stripe y
+   * persistimos el estado real por si el webhook todavía no llegó.
+   */
+  async syncSubscriptionFromStripeForUser(user: User): Promise<{
+    status: string;
+    stripeSubscriptionId: string | null;
+    currentPeriodEnd: string | null;
+  }> {
+    if (!user.stripeSubscriptionId) {
+      throw new BadRequestException(
+        'No hay suscripción Stripe asociada al usuario',
+      );
+    }
+    const stripe = this.requireStripe();
+    const subscription = await stripe.subscriptions.retrieve(
+      user.stripeSubscriptionId,
+    );
+    await this.applySubscription(subscription);
+
+    const updated = await this.users.findOne({ where: { id: user.id } });
+    return {
+      status: updated?.subscriptionStatus ?? user.subscriptionStatus,
+      stripeSubscriptionId: user.stripeSubscriptionId,
+      currentPeriodEnd: updated?.currentPeriodEnd?.toISOString() ?? null,
+    };
+  }
+
+  async listPaymentMethods(user: User) {
+    const stripe = this.requireStripe();
+    if (!user.stripeCustomerId) return [];
+
+    const paymentMethods = await stripe.paymentMethods.list({
+      customer: user.stripeCustomerId,
+      type: 'card',
+    });
+
+    return paymentMethods.data.map((pm) => ({
+      id: pm.id,
+      brand: pm.card?.brand,
+      last4: pm.card?.last4,
+      expMonth: pm.card?.exp_month,
+      expYear: pm.card?.exp_year,
+    }));
+  }
+
+  async deletePaymentMethod(paymentMethodId: string) {
+    const stripe = this.requireStripe();
+    await stripe.paymentMethods.detach(paymentMethodId);
   }
 
   async changePlan(user: User, plan: PlanId) {
@@ -146,10 +359,22 @@ export class BillingService {
         await this.applyCheckout(session);
         break;
       }
+      case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
         const sub = event.data.object as Stripe.Subscription;
         await this.applySubscription(sub);
+        break;
+      }
+      case 'invoice.payment_succeeded':
+      case 'invoice.payment_failed':
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const subId = this.extractSubscriptionIdFromInvoice(invoice);
+        if (subId) {
+          const sub = await stripe.subscriptions.retrieve(subId);
+          await this.applySubscription(sub);
+        }
         break;
       }
       default:
@@ -157,6 +382,30 @@ export class BillingService {
     }
 
     return { received: true };
+  }
+
+  /**
+   * En algunas versiones recientes de la API, `invoice.subscription` no
+   * viene en el nivel superior; hay que buscarlo en las líneas del invoice.
+   */
+  private extractSubscriptionIdFromInvoice(
+    invoice: Stripe.Invoice,
+  ): string | null {
+    const inv = invoice as unknown as Record<string, unknown>;
+    const top = inv.subscription as string | { id?: string } | null | undefined;
+    if (typeof top === 'string') return top;
+    if (top && typeof top === 'object' && typeof top.id === 'string') {
+      return top.id;
+    }
+
+    const lines = inv.lines as { data?: Array<Record<string, unknown>> } | undefined;
+    for (const line of lines?.data ?? []) {
+      const ls = line.subscription as string | { id?: string } | null | undefined;
+      if (typeof ls === 'string') return ls;
+      if (ls && typeof ls === 'object' && typeof ls.id === 'string') return ls.id;
+    }
+
+    return null;
   }
 
   private async applyCheckout(session: Stripe.Checkout.Session) {
@@ -187,6 +436,11 @@ export class BillingService {
     let user: User | null = null;
     if (userId) {
       user = await this.users.findOne({ where: { id: userId } });
+    }
+    if (!user) {
+      user = await this.users.findOne({
+        where: { stripeSubscriptionId: sub.id },
+      });
     }
     if (!user && sub.customer) {
       user = await this.users.findOne({

@@ -1,10 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   Headers,
+  Param,
   Post,
   Req,
   UseGuards,
+  ValidationPipe,
 } from '@nestjs/common';
 import { IsIn } from 'class-validator';
 import type { RawBodyRequest } from '@nestjs/common';
@@ -12,6 +16,7 @@ import type { Request } from 'express';
 import { CurrentUser, Public } from '../common/decorators';
 import { User } from '../users/user.entity';
 import { BillingService } from './billing.service';
+import { SubscribeDto } from './dto/subscribe.dto';
 
 class PlanBody {
   @IsIn(['basic', 'pro'])
@@ -30,6 +35,36 @@ export class BillingController {
   @Post('portal')
   portal(@CurrentUser() user: User) {
     return this.billing.createPortalSession(user);
+  }
+
+  /**
+   * Cobro embebido (tarjeta directa en la app, sin redirigir a Stripe
+   * Checkout). Devuelve clientSecret cuando el pago requiere confirmación
+   * (3DS/SCA); el front llama a `stripe.confirmCardPayment` y luego a
+   * POST /billing/subscribe/sync.
+   */
+  @Post('subscribe')
+  subscribe(
+    @CurrentUser() user: User,
+    @Body(ValidationPipe) body: SubscribeDto,
+  ) {
+    return this.billing.createSubscription(user, body.plan, body.paymentMethodId);
+  }
+
+  @Post('subscribe/sync')
+  syncSubscription(@CurrentUser() user: User) {
+    return this.billing.syncSubscriptionFromStripeForUser(user);
+  }
+
+  @Get('payment-methods')
+  paymentMethods(@CurrentUser() user: User) {
+    return this.billing.listPaymentMethods(user);
+  }
+
+  @Delete('payment-methods/:id')
+  async deletePaymentMethod(@Param('id') id: string) {
+    await this.billing.deletePaymentMethod(id);
+    return { ok: true };
   }
 
   @Post('change-plan')
