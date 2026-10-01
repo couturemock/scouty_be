@@ -96,7 +96,7 @@ export class AuthService {
       await this.waitlist.markRegistered(waitlistEntryId, user.id);
     }
 
-    await this.mail.sendVerification(user.email, verifyToken);
+    await this.mail.sendVerification(user.email, verifyToken, dto.locale);
 
     return {
       accessToken: this.tokenFor(user),
@@ -127,7 +127,7 @@ export class AuthService {
     return { ok: true };
   }
 
-  async forgotPassword(email: string) {
+  async forgotPassword(email: string, locale?: string) {
     const user = await this.users.findOne({
       where: { email: email.toLowerCase() },
     });
@@ -135,7 +135,11 @@ export class AuthService {
     user.passwordResetToken = randomBytes(32).toString('hex');
     user.passwordResetExpires = new Date(Date.now() + 1000 * 60 * 60);
     await this.users.save(user);
-    await this.mail.sendPasswordReset(user.email, user.passwordResetToken);
+    await this.mail.sendPasswordReset(
+      user.email,
+      user.passwordResetToken,
+      locale,
+    );
     return { ok: true };
   }
 

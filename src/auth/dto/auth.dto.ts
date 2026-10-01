@@ -27,6 +27,11 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   invite?: string;
+
+  /** UI language at submit time, so the verification email matches it. */
+  @IsOptional()
+  @IsIn(['es', 'en'])
+  locale?: 'es' | 'en';
 }
 
 export class LoginDto {
@@ -40,6 +45,11 @@ export class LoginDto {
 export class ForgotPasswordDto {
   @IsEmail()
   email!: string;
+
+  /** UI language at submit time, so the reset email matches it. */
+  @IsOptional()
+  @IsIn(['es', 'en'])
+  locale?: 'es' | 'en';
 }
 
 export class ResetPasswordDto {

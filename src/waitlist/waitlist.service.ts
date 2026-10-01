@@ -126,11 +126,13 @@ export class WaitlistService {
         existing.inviteSentAt = null;
         existing.inviteExpiresAt = null;
         existing.source = dto.source?.trim() || existing.source;
+        existing.locale = dto.locale ?? existing.locale;
         await this.entries.save(existing);
         const mailed = await this.mail.sendWaitlistConfirm({
           name: existing.name,
           email: existing.email,
           accessWindowHours: settings.accessWindowHours,
+          locale: existing.locale,
         });
         if (mailed) {
           this.logger.log(`Waitlist confirm email sent to ${existing.email}`);
@@ -159,6 +161,7 @@ export class WaitlistService {
         email,
         status: 'waiting',
         source: dto.source?.trim() || null,
+        locale: dto.locale ?? 'es',
       }),
     );
 
@@ -166,6 +169,7 @@ export class WaitlistService {
       name: entry.name,
       email: entry.email,
       accessWindowHours: settings.accessWindowHours,
+      locale: entry.locale,
     });
     if (mailed) {
       this.logger.log(`Waitlist confirm email sent to ${entry.email}`);
@@ -251,6 +255,7 @@ export class WaitlistService {
           registerUrl,
           expiresAt,
           accessWindowHours: settings.accessWindowHours,
+          locale: entry.locale,
         });
         entry.inviteToken = token;
         entry.inviteSentAt = new Date();

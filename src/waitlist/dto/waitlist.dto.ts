@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -21,6 +22,15 @@ export class ReserveWaitlistDto {
   @IsOptional()
   @IsString()
   source?: string;
+
+  /**
+   * UI language at submit time. Stored on the entry so the later access
+   * email (sent asynchronously, with no live request to read it from)
+   * still matches it.
+   */
+  @IsOptional()
+  @IsIn(['es', 'en'])
+  locale?: 'es' | 'en';
 }
 
 export class UpdateSettingsDto {

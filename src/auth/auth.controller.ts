@@ -49,7 +49,7 @@ export class AuthController {
   @Public()
   @Post('forgot-password')
   forgot(@Body() dto: ForgotPasswordDto) {
-    return this.auth.forgotPassword(dto.email);
+    return this.auth.forgotPassword(dto.email, dto.locale);
   }
 
   @Public()

@@ -52,6 +52,10 @@ export class WaitlistEntry {
   @Column({ type: 'varchar', nullable: true })
   source!: string | null;
 
+  /** UI language at signup, so the later access email matches it. */
+  @Column({ type: 'varchar', default: 'es' })
+  locale!: string;
+
   @CreateDateColumn()
   createdAt!: Date;
 

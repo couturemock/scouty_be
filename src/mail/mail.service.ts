@@ -26,6 +26,28 @@ const LOGO_SIZE = { width: 180, height: 56 };
  */
 const EMAIL_LOGO_URL = 'https://sniperdrop.com/dropsniper-lockup-full.png';
 
+export type MailLocale = 'es' | 'en';
+
+function normalizeLocale(locale?: string | null): MailLocale {
+  return locale === 'en' ? 'en' : 'es';
+}
+
+/** Chrome strings shared by every email (not specific to one template). */
+const CHROME = {
+  es: {
+    linkFallback: 'Si el botón no funciona, copie y pegue este enlace en su navegador:',
+    regards: 'Atentamente,',
+    team: 'Equipo Drop Sniper',
+    tagline: 'Drop Sniper · Descubra. Analice. Decida.',
+  },
+  en: {
+    linkFallback: "If the button doesn't work, copy and paste this link into your browser:",
+    regards: 'Best regards,',
+    team: 'Drop Sniper Team',
+    tagline: 'Drop Sniper · Discover. Analyze. Decide.',
+  },
+} as const;
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -99,12 +121,15 @@ export class MailService {
   }
 
   private layout(opts: {
+    locale: MailLocale;
     preheader: string;
     title: string;
     bodyHtml: string;
     cta?: { label: string; href: string };
     footerNote?: string;
   }) {
+    const chrome = CHROME[opts.locale];
+
     // Gradients aren't supported by Outlook desktop; `background-color` is
     // the fallback those clients render instead of `background`.
     const cta = opts.cta
@@ -120,14 +145,14 @@ export class MailService {
     const linkFallback = opts.cta
       ? `<tr>
           <td style="padding:4px 40px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;line-height:1.5;color:${MUTED};">
-            Si el botón no funciona, copie y pegue este enlace en su navegador:<br/>
+            ${chrome.linkFallback}<br/>
             <a href="${opts.cta.href}" style="color:#8aa6fb;word-break:break-all;">${opts.cta.href}</a>
           </td>
         </tr>`
       : '';
 
     return `<!DOCTYPE html>
-<html lang="es">
+<html lang="${opts.locale}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -165,12 +190,12 @@ export class MailService {
           ${linkFallback}
           <tr>
             <td style="padding:8px 40px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${MUTED};border-top:1px solid ${BORDER};">
-              ${opts.footerNote ?? 'Atentamente,<br/><strong style="color:' + INK + ';">Equipo Drop Sniper</strong>'}
+              ${opts.footerNote ?? chrome.regards + '<br/><strong style="color:' + INK + ';">' + chrome.team + '</strong>'}
             </td>
           </tr>
         </table>
         <p style="margin:16px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:11px;color:${MUTED};">
-          Drop Sniper · Descubra. Analice. Decida.
+          ${chrome.tagline}
         </p>
       </td>
     </tr>
@@ -270,54 +295,114 @@ export class MailService {
     }
   }
 
-  async sendVerification(email: string, token: string) {
+  async sendVerification(email: string, token: string, locale?: string) {
+    const loc = normalizeLocale(locale);
     const link = `${this.appUrl()}/auth/verificar?token=${token}`;
-    const html = this.layout({
-      preheader: 'Confirme su correo para activar Drop Sniper.',
-      title: 'Verifique su correo',
-      bodyHtml: `<p style="margin:0 0 12px;">Estimado/a usuario/a,</p>
+    const copy = {
+      es: {
+        preheader: 'Confirme su correo para activar Drop Sniper.',
+        title: 'Verifique su correo',
+        body: `<p style="margin:0 0 12px;">Estimado/a usuario/a,</p>
         <p style="margin:0;">Para activar su cuenta en Drop Sniper, confirme su dirección de correo electrónico.</p>`,
-      cta: { label: 'Verificar correo', href: link },
+        cta: 'Verificar correo',
+        subject: 'Verifique su correo — Drop Sniper',
+      },
+      en: {
+        preheader: 'Confirm your email to activate Drop Sniper.',
+        title: 'Verify your email',
+        body: `<p style="margin:0 0 12px;">Hello,</p>
+        <p style="margin:0;">To activate your Drop Sniper account, please confirm your email address.</p>`,
+        cta: 'Verify email',
+        subject: 'Verify your email — Drop Sniper',
+      },
+    }[loc];
+    const html = this.layout({
+      locale: loc,
+      preheader: copy.preheader,
+      title: copy.title,
+      bodyHtml: copy.body,
+      cta: { label: copy.cta, href: link },
     });
-    await this.send(email, 'Verifique su correo — Drop Sniper', html);
+    await this.send(email, copy.subject, html);
   }
 
-  async sendPasswordReset(email: string, token: string) {
+  async sendPasswordReset(email: string, token: string, locale?: string) {
+    const loc = normalizeLocale(locale);
     const link = `${this.appUrl()}/auth/recuperar?token=${token}`;
-    const html = this.layout({
-      preheader: 'Restablezca su contraseña de Drop Sniper.',
-      title: 'Restablecer contraseña',
-      bodyHtml: `<p style="margin:0 0 12px;">Estimado/a usuario/a,</p>
+    const copy = {
+      es: {
+        preheader: 'Restablezca su contraseña de Drop Sniper.',
+        title: 'Restablecer contraseña',
+        body: `<p style="margin:0 0 12px;">Estimado/a usuario/a,</p>
         <p style="margin:0;">Hemos recibido una solicitud para restablecer su contraseña. Si no la solicitó, ignore este mensaje.</p>`,
-      cta: { label: 'Restablecer contraseña', href: link },
+        cta: 'Restablecer contraseña',
+        subject: 'Recupere su contraseña — Drop Sniper',
+      },
+      en: {
+        preheader: 'Reset your Drop Sniper password.',
+        title: 'Reset your password',
+        body: `<p style="margin:0 0 12px;">Hello,</p>
+        <p style="margin:0;">We received a request to reset your password. If you didn't request this, you can ignore this email.</p>`,
+        cta: 'Reset password',
+        subject: 'Reset your password — Drop Sniper',
+      },
+    }[loc];
+    const html = this.layout({
+      locale: loc,
+      preheader: copy.preheader,
+      title: copy.title,
+      bodyHtml: copy.body,
+      cta: { label: copy.cta, href: link },
     });
-    await this.send(email, 'Recupere su contraseña — Drop Sniper', html);
+    await this.send(email, copy.subject, html);
   }
 
   async sendWaitlistConfirm(opts: {
     name: string;
     email: string;
     accessWindowHours: number;
+    locale?: string;
   }) {
+    const loc = normalizeLocale(opts.locale);
     const safeName = escapeHtml(opts.name);
+    const copy = {
+      es: {
+        preheader: 'Está en la lista de espera de Drop Sniper. Le avisaremos cuando haya plaza.',
+        title: 'Solicitud recibida',
+        greeting: `Estimado/a ${safeName},`,
+        full: 'Las plazas de Drop Sniper están completas en este momento. Hemos registrado su solicitud en la lista de espera.',
+        box: `Cuando se libere una plaza, le enviaremos un correo. Dispondrá de <strong>${opts.accessWindowHours} horas</strong> para crear su cuenta y completar la suscripción.`,
+        pricing: 'El precio es el mismo para todos los usuarios; no aplicamos descuentos por lista de espera.',
+        subject: 'Lista de espera — Drop Sniper',
+      },
+      en: {
+        preheader: "You're on the Drop Sniper waitlist. We'll let you know when a spot opens up.",
+        title: 'Request received',
+        greeting: `Hi ${safeName},`,
+        full: 'Drop Sniper is at capacity right now. We\'ve added your request to the waitlist.',
+        box: `We'll email you as soon as a spot opens up. You'll have <strong>${opts.accessWindowHours} hours</strong> to create your account and complete your subscription.`,
+        pricing: "Pricing is the same for everyone; we don't offer waitlist discounts.",
+        subject: 'Waitlist — Drop Sniper',
+      },
+    }[loc];
     const html = this.layout({
-      preheader: `Está en la lista de espera de Drop Sniper. Le avisaremos cuando haya plaza.`,
-      title: 'Solicitud recibida',
+      locale: loc,
+      preheader: copy.preheader,
+      title: copy.title,
       bodyHtml: `
-        <p style="margin:0 0 14px;">Estimado/a ${safeName},</p>
-        <p style="margin:0 0 14px;">Las plazas de Drop Sniper están completas en este momento. Hemos registrado su solicitud en la lista de espera.</p>
+        <p style="margin:0 0 14px;">${copy.greeting}</p>
+        <p style="margin:0 0 14px;">${copy.full}</p>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;background:${CARD_BG_SOFT};border:1px solid ${BORDER};border-radius:12px;">
           <tr>
             <td style="padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:${INK};">
-              Cuando se libere una plaza, le enviaremos un correo. Dispondrá de <strong>${opts.accessWindowHours} horas</strong> para crear su cuenta y completar la suscripción.
+              ${copy.box}
             </td>
           </tr>
         </table>
-        <p style="margin:0;">El precio es el mismo para todos los usuarios; no aplicamos descuentos por lista de espera.</p>`,
-      footerNote: `Atentamente,<br/><strong style="color:${INK};">Equipo Drop Sniper</strong>`,
+        <p style="margin:0;">${copy.pricing}</p>`,
     });
 
-    return this.sendSafe(opts.email, 'Lista de espera — Drop Sniper', html);
+    return this.sendSafe(opts.email, copy.subject, html);
   }
 
   async sendWaitlistAccess(opts: {
@@ -326,34 +411,55 @@ export class MailService {
     registerUrl: string;
     expiresAt: Date;
     accessWindowHours: number;
+    locale?: string;
   }) {
+    const loc = normalizeLocale(opts.locale);
     const safeName = escapeHtml(opts.name);
-    const expires = opts.expiresAt.toLocaleString('es-ES', {
-      dateStyle: 'long',
-      timeStyle: 'short',
-    });
+    const expires = opts.expiresAt.toLocaleString(
+      loc === 'en' ? 'en-US' : 'es-ES',
+      { dateStyle: 'long', timeStyle: 'short' },
+    );
+    const copy = {
+      es: {
+        preheader: `Su plaza en Drop Sniper está disponible. Tiene ${opts.accessWindowHours} horas para registrarse.`,
+        title: 'Su plaza ya está disponible',
+        greeting: `Estimado/a ${safeName},`,
+        intro: 'Hay una plaza disponible para usted en Drop Sniper.',
+        box: `Dispone de <strong>${opts.accessWindowHours} horas</strong> (hasta el <strong>${expires}</strong>) para crear su cuenta y suscribirse al precio habitual.`,
+        expiry: 'Si no completa el proceso a tiempo, la plaza se asignará a la siguiente persona de la lista.',
+        cta: 'Crear mi cuenta',
+        subject: 'Su plaza en Drop Sniper ya está disponible',
+      },
+      en: {
+        preheader: `Your Drop Sniper spot is ready. You have ${opts.accessWindowHours} hours to sign up.`,
+        title: 'Your spot is ready',
+        greeting: `Hi ${safeName},`,
+        intro: 'A spot just opened up for you on Drop Sniper.',
+        box: `You have <strong>${opts.accessWindowHours} hours</strong> (until <strong>${expires}</strong>) to create your account and subscribe at the regular price.`,
+        expiry: "If you don't complete this in time, the spot will go to the next person on the list.",
+        cta: 'Create my account',
+        subject: 'Your Drop Sniper spot is ready',
+      },
+    }[loc];
     const html = this.layout({
-      preheader: `Su plaza en Drop Sniper está disponible. Tiene ${opts.accessWindowHours} horas para registrarse.`,
-      title: 'Su plaza ya está disponible',
+      locale: loc,
+      preheader: copy.preheader,
+      title: copy.title,
       bodyHtml: `
-        <p style="margin:0 0 14px;">Estimado/a ${safeName},</p>
-        <p style="margin:0 0 14px;">Hay una plaza disponible para usted en Drop Sniper.</p>
+        <p style="margin:0 0 14px;">${copy.greeting}</p>
+        <p style="margin:0 0 14px;">${copy.intro}</p>
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;background:${CARD_BG_SOFT};border:1px solid ${BORDER};border-radius:12px;">
           <tr>
             <td style="padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:${INK};">
-              Dispone de <strong>${opts.accessWindowHours} horas</strong> (hasta el <strong>${expires}</strong>) para crear su cuenta y suscribirse al precio habitual.
+              ${copy.box}
             </td>
           </tr>
         </table>
-        <p style="margin:0;">Si no completa el proceso a tiempo, la plaza se asignará a la siguiente persona de la lista.</p>`,
-      cta: { label: 'Crear mi cuenta', href: opts.registerUrl },
+        <p style="margin:0;">${copy.expiry}</p>`,
+      cta: { label: copy.cta, href: opts.registerUrl },
     });
 
-    await this.send(
-      opts.email,
-      'Su plaza en Drop Sniper ya está disponible',
-      html,
-    );
+    await this.send(opts.email, copy.subject, html);
   }
 }
 
