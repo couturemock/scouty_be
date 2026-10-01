@@ -60,8 +60,23 @@ export class DevUsersSeedService implements OnModuleInit {
       subscriptionStatus: 'active',
     });
 
+    const freeEmail = (
+      this.config.get<string>('DEV_FREE_EMAIL') ?? 'free@scoutly.dev'
+    ).toLowerCase();
+    const freePassword =
+      this.config.get<string>('DEV_FREE_PASSWORD') ?? 'Free123!';
+
+    await this.upsertUser({
+      email: freeEmail,
+      password: freePassword,
+      name: 'Usuario Sin Suscripción',
+      plan: 'basic',
+      isAdmin: false,
+      subscriptionStatus: 'none',
+    });
+
     this.logger.log(
-      `Usuarios dev listos → admin: ${adminEmail} · user: ${userEmail} (${userPlan}, activo)`,
+      `Usuarios dev listos → admin: ${adminEmail} · user: ${userEmail} (${userPlan}, activo) · free: ${freeEmail} (sin suscripción)`,
     );
   }
 
@@ -75,8 +90,10 @@ export class DevUsersSeedService implements OnModuleInit {
   }) {
     let user = await this.users.findOne({ where: { email: opts.email } });
     const passwordHash = await bcrypt.hash(opts.password, 10);
-    const periodEnd = new Date();
-    periodEnd.setDate(periodEnd.getDate() + 30);
+    const hasSubscription = opts.subscriptionStatus !== 'none';
+    const periodEnd = hasSubscription
+      ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+      : null;
 
     if (!user) {
       user = this.users.create({
