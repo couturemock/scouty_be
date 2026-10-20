@@ -4,8 +4,8 @@ import { randomUUID } from 'crypto';
 
 /**
  * Public image hosting for user-uploaded photos (e.g. "analizar por imagen").
- * Needed because supplier image search (Alibaba.com/Otapi `ImageUrl`) requires
- * a fetchable public URL, not raw bytes/base64.
+ * Needed because supplier image search (AliExpress Business API `imgUrl`)
+ * requires a fetchable public URL, not raw bytes/base64.
  *
  * Env: SUPABASE_URL, SUPABASE_KEY (service role), SUPABASE_BUCKET
  */

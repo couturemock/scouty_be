@@ -8,9 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CatalogService } from '../catalog/catalog.service';
-import { AdWinnersService } from '../creative/ad-winners.service';
 import { CreativeIntelligenceService } from '../creative/creative-intelligence.service';
 import { currentWeekKey, previousWeekKey } from '../common/week';
+import { categoryLabelsForMarket } from '../discovery/discovery-categories';
+import { TrendDiscoveryService } from '../discovery/trend-discovery.service';
 import {
   KeepaAmazonProvider,
   KeepaIngestProgress,
@@ -30,6 +31,7 @@ import {
   isTrendingCandidate,
   isWinnerCandidate,
 } from './drop-sniper.score';
+import { TrendScoreBreakdown, WINNER_MIN_DAYS } from '../discovery/trend-score';
 
 type CatalogView = 'published' | 'draft';
 
@@ -49,8 +51,7 @@ export class ProductsService {
     private readonly catalog: CatalogService,
     @Inject(forwardRef(() => CreativeIntelligenceService))
     private readonly creativeIntelligence: CreativeIntelligenceService,
-    @Inject(forwardRef(() => AdWinnersService))
-    private readonly adWinners: AdWinnersService,
+    private readonly discovery: TrendDiscoveryService,
   ) {}
 
   private slugify(
@@ -145,12 +146,8 @@ export class ProductsService {
     return this.products.count({ where: { catalogWeekKey: weekKey } });
   }
 
-  private async productsForWeek(weekKey: string, market?: string) {
-    const where: { catalogWeekKey: string; country?: string } = {
-      catalogWeekKey: weekKey,
-    };
-    if (market) where.country = market.toUpperCase();
-    return this.products.find({ where });
+  private async productsForWeek(weekKey: string) {
+    return this.products.find({ where: { catalogWeekKey: weekKey } });
   }
 
   async upsertFromSignals(
@@ -313,7 +310,7 @@ export class ProductsService {
         rating: signal.rating,
         reviewCount: signal.reviewCount,
         raw: signal.raw,
-        // AliExpress (RapidAPI) + Alibaba.com links captured at ingest time
+        // AliExpress (RapidAPI Business API) offers captured at ingest time
         suppliers: supplierOffers,
         profitability,
       };
@@ -325,162 +322,93 @@ export class ProductsService {
     return saved;
   }
 
-  /** Amazon/Keepa only — genera borrador; admin publica cuando esté listo. */
-  async runWeeklyIngestion(
-    markets?: string[],
-    options?: {
-      productsPerCategory?: number;
-      ciTopN?: number;
-      onProgress?: (progress: KeepaIngestProgress) => void;
-    },
-  ) {
+  /**
+   * Genera el borrador semanal; admin publica cuando esté listo. Fuente:
+   * anuncios de tiendas en TikTok/Meta vía PipiAds (TrendDiscoveryService),
+   * con PVP de la tienda y coste CJ/AliExpress. Keepa ya no participa.
+   */
+  async runWeeklyIngestion(options?: {
+    productsTarget?: number;
+    creditBudget?: number;
+    onProgress?: (progress: KeepaIngestProgress) => void;
+  }) {
     const weekKey = currentWeekKey();
-    this.suppliers.beginIngestRun();
+    const productsTarget = this.discovery.productsTarget(options?.productsTarget);
+    const requestedBudget = this.discovery.creditBudget(options?.creditBudget);
     this.logger.log(
-      `Ingesta Keepa week=${weekKey} markets=${markets?.join(',') ?? 'default'} perCat=${options?.productsPerCategory ?? 'env'}`,
+      `Ingesta PipiAds week=${weekKey} productsTarget=${productsTarget} budget=${requestedBudget}`,
     );
 
-    if (markets?.length) {
-      const placeholders = markets.map((_, i) => `$${i + 2}`).join(',');
-      await this.products.manager.query(
-        `DELETE FROM ranking_entries WHERE "weekKey" = $1 AND "productId" IN (SELECT id FROM products WHERE "catalogWeekKey" = $1 AND country IN (${placeholders}))`,
-        [weekKey, ...markets],
-      );
-      await this.products.manager.query(
-        `DELETE FROM product_snapshots WHERE "weekKey" = $1 AND "productId" IN (SELECT id FROM products WHERE "catalogWeekKey" = $1 AND country IN (${placeholders}))`,
-        [weekKey, ...markets],
-      );
-      await this.products.manager.query(
-        `DELETE FROM products WHERE "catalogWeekKey" = $1 AND country IN (${placeholders})`,
-        [weekKey, ...markets],
-      );
-    } else {
-      await this.products.manager.query(
-        `DELETE FROM ranking_entries WHERE "weekKey" = $1`,
-        [weekKey],
-      );
-      await this.products.manager.query(
-        `DELETE FROM product_snapshots WHERE "weekKey" = $1`,
-        [weekKey],
-      );
-      await this.products.manager.query(
-        `DELETE FROM products WHERE "catalogWeekKey" = $1`,
-        [weekKey],
-      );
-    }
+    await this.products.manager.query(
+      `DELETE FROM ranking_entries WHERE "weekKey" = $1 AND scope <> 'ad_winners'`,
+      [weekKey],
+    );
+    await this.products.manager.query(
+      `DELETE FROM product_snapshots WHERE "weekKey" = $1`,
+      [weekKey],
+    );
+    await this.products.manager.query(
+      `DELETE FROM products WHERE "catalogWeekKey" = $1`,
+      [weekKey],
+    );
 
-    const amazonSignals = await this.amazon.collectWeeklyCandidates(markets, {
-      productsPerCategory: options?.productsPerCategory,
-      onProgress: options?.onProgress,
+    const startedAt = Date.now();
+    const onProgress = options?.onProgress;
+    const run = await this.discovery.runWeek(weekKey, {
+      productsTarget,
+      creditBudget: requestedBudget,
+      onProgress: (p) =>
+        onProgress?.({
+          market: 'ALL',
+          step: p.step,
+          categoriesDone: p.done,
+          categoriesTotal: p.total,
+          callsDone: p.creditsSpent,
+          elapsedMs: Date.now() - startedAt,
+          etaSeconds: null,
+        }),
     });
-    const products = await this.upsertFromSignals(amazonSignals, weekKey);
 
-    // No fake previous-week BSR — TRENDING uses Keepa growthPct / salesRankDrops.
+    onProgress?.({
+      market: 'ALL',
+      step: 'rankings',
+      categoriesDone: 0,
+      categoriesTotal: 1,
+      callsDone: run.budget.spent,
+      elapsedMs: Date.now() - startedAt,
+      etaSeconds: null,
+    });
+    await this.rebuildRankings(weekKey);
 
-    const keepa = await this.amazon.getStatus();
+    const count = await this.countForWeek(weekKey);
     await this.catalog.markIngested(
       weekKey,
-      markets ?? [],
-      products.length,
-      keepa.enabled
-        ? `Keepa · ${keepa.tokensLeft ?? '?'} tokens restantes`
-        : 'Fixtures',
+      [],
+      count,
+      `PipiAds · ${run.budget.spent}/${run.budget.total} créditos (caché: ${run.cache.hits} hits/${run.cache.misses} misses) · ${run.result.saved} productos (${run.result.withSupplier} con proveedor)${run.pipiadsRemaining != null ? ` · quedan ${run.pipiadsRemaining}` : ''}`,
     );
     this.logger.log(
-      `Snapshot ${weekKey} guardado · ${products.length} productos · markets=${(markets ?? []).join(',') || 'default'}`,
+      `Snapshot ${weekKey} guardado · ${count} productos · credits=${run.budget.spent}`,
     );
-
-    // Awaited (not fire-and-forget): this whole method only runs inside the
-    // BullMQ worker (IngestionProcessor) or the one-time fixture seed, never
-    // on the HTTP request path — the /admin/catalog/ingest endpoint returns
-    // as soon as the job is enqueued. A detached `.then()` here used to let
-    // the job report "done" right after Keepa saved, while CI + Ad Winners
-    // kept running loose in the process; a worker restart/redeploy during
-    // that multi-minute window silently dropped them with no retry and no
-    // ad_winners rows ever written. Awaiting keeps it one durable job: if the
-    // worker dies mid-run, BullMQ sees the job as incomplete and can retry
-    // the whole thing instead of quietly losing the second half forever.
-    const ciTopN = options?.ciTopN;
-    const ingestMarkets = markets ?? [];
-    const onProgress = options?.onProgress;
-    let ci = { enriched: 0, topN: 0, totalCredits: 0 };
-    try {
-      onProgress?.({
-        market: ingestMarkets[0] ?? 'ALL',
-        step: 'creative-intelligence',
-        categoriesDone: 0,
-        categoriesTotal: 1,
-        callsDone: 0,
-        elapsedMs: 0,
-        etaSeconds: null,
-      });
-      ci = await this.creativeIntelligence.enrichTopProductsAtIngest(
-        weekKey,
-        (p) => this.scoreProduct(p),
-        ciTopN,
-      );
-      this.logger.log(
-        `CI PipiAds listo week=${weekKey} enriched=${ci.enriched}/${ci.topN} credits≈${ci.totalCredits}`,
-      );
-      // Re-score with Ad Score after CI attaches creatives
-      await this.rebuildRankings(weekKey);
-    } catch (err) {
-      this.logger.warn(`CI PipiAds falló week=${weekKey}: ${err}`);
-    }
-
-    const adMarkets = (ingestMarkets.length ? ingestMarkets : ['ES']).slice(0, 2);
-    let adWinnersRanked = 0;
-    let adWinnersCredits = 0;
-    for (const [i, m] of adMarkets.entries()) {
-      try {
-        onProgress?.({
-          market: m,
-          step: 'ad-winners',
-          categoriesDone: i,
-          categoriesTotal: adMarkets.length,
-          callsDone: 0,
-          elapsedMs: 0,
-          etaSeconds: null,
-        });
-        const ad = await this.adWinners.runForWeek(weekKey, m);
-        adWinnersRanked += ad.ranked;
-        adWinnersCredits += ad.credits;
-        this.logger.log(
-          `Ad Winners ${m} week=${weekKey} ranked=${ad.ranked} credits≈${ad.credits}`,
-        );
-      } catch (err) {
-        this.logger.warn(`Ad Winners ${m} falló: ${err}`);
-      }
-    }
-    // Ad Winners may attach ads onto Amazon ASINs — refresh Drop Sniper
-    await this.rebuildRankings(weekKey);
 
     return {
       weekKey,
-      count: products.length,
-      markets: markets ?? null,
-      productsPerCategory: options?.productsPerCategory ?? null,
-      provider: this.amazon.enabled() ? 'keepa' : 'fixture',
+      count,
+      productsTarget,
+      provider: this.discovery.enabled() ? 'pipiads' : 'disabled',
       status: 'draft',
-      creativeIntelligence: {
-        enriched: ci.enriched,
-        totalCredits: ci.totalCredits,
-        topN:
-          ciTopN != null && Number.isFinite(ciTopN) && ciTopN > 0
-            ? Math.min(Math.floor(ciTopN), 200)
-            : 60,
-        running: false,
-      },
-      adWinners: {
-        ranked: adWinnersRanked,
-        credits: adWinnersCredits,
+      discovery: {
+        credits: run.budget.spent,
+        budget: run.budget,
+        result: run.result,
+        pipiadsRemaining: run.pipiadsRemaining,
       },
       message:
-        'Ingesta completa: Keepa + CI + Ad Winners. Publicá el weekKey cuando quieras que salga en la web.',
+        'Ingesta completa: PipiAds (TikTok/Meta) + tienda + CJ/AliExpress. Publicá el weekKey cuando quieras que salga en la web.',
     };
   }
 
-  /** WeekKeys de la lista dada que ya tienen ranking_entries scope=ad_winners. */
+  /** WeekKeys (de la lista) que tienen tablero legacy Ad Winners. */
   async weekKeysWithAdWinners(weekKeys: string[]): Promise<Set<string>> {
     if (!weekKeys.length) return new Set();
     const rows = await this.rankings
@@ -490,31 +418,6 @@ export class ProductsService {
       .andWhere('r."weekKey" IN (:...weekKeys)', { weekKeys })
       .getRawMany<{ weekKey: string }>();
     return new Set(rows.map((r) => r.weekKey));
-  }
-
-  /**
-   * Re-ejecuta solo Ad Winners (PipiAds seeds → cluster → Ad Score) para un
-   * weekKey ya ingerido — no vuelve a golpear Keepa ni CI. Útil cuando Ad
-   * Winners falló o quedó vacío en la ingesta original.
-   */
-  async rerunAdWinners(weekKey: string, markets: string[]) {
-    const targets = (markets.length ? markets : ['ES']).slice(0, 2);
-    const results: Array<{ market: string; ranked: number; credits: number }> =
-      [];
-    for (const m of targets) {
-      try {
-        const ad = await this.adWinners.runForWeek(weekKey, m);
-        results.push({ market: m, ranked: ad.ranked, credits: ad.credits });
-        this.logger.log(
-          `Ad Winners (retry) ${m} week=${weekKey} ranked=${ad.ranked} credits≈${ad.credits}`,
-        );
-      } catch (err) {
-        this.logger.warn(`Ad Winners (retry) ${m} falló: ${err}`);
-        results.push({ market: m, ranked: 0, credits: 0 });
-      }
-    }
-    await this.rebuildRankings(weekKey);
-    return { weekKey, markets: targets, results };
   }
 
   async rebuildRankings(weekKey: string) {
@@ -544,7 +447,7 @@ export class ProductsService {
 
     // Every board (general/trending/winners/categoría/país, not just
     // margin/profit) now requires the product to be sourceable on
-    // AliExpress/Alibaba — every product shown must be findable there. This
+    // AliExpress — every product shown must be findable there. This
     // also makes ads-origin products (no Amazon match, from AdWinnersService)
     // eligible for general/trending/winners for the first time, not just the
     // ad_winners scope.
@@ -588,11 +491,19 @@ export class ProductsService {
       10,
     );
 
+    const trendOf = (p: Product) =>
+      (p.meta?.dropSniper as { trend?: { velocity: number; total: number } } | undefined)?.trend;
     const trending = sourceableProducts
       .filter((p) =>
         isTrendingCandidate(p, computeDropSniperScore(p)),
       )
       .sort((a, b) => {
+        const ta = trendOf(a);
+        const tb = trendOf(b);
+        if (ta && tb) {
+          if (tb.velocity !== ta.velocity) return tb.velocity - ta.velocity;
+          return tb.total - ta.total;
+        }
         const keepa = (p: Product) =>
           (p.meta?.keepa as Record<string, unknown> | undefined) ?? {};
         const g7 = (p: Product) => Number(keepa(p).growthPct7 ?? 0);
@@ -622,6 +533,23 @@ export class ProductsService {
     const winners = sourceableProducts
       .filter((p) => isWinnerCandidate(p, computeDropSniperScore(p)))
       .sort((a, b) => this.dropSniperTotal(b) - this.dropSniperTotal(a));
+    // Few products reach 3+ stores in one week's credit budget — fill the
+    // board with sustained (≥ 30 days), still-active, non-saturated ones.
+    if (winners.length < 10) {
+      const extra = sourceableProducts
+        .filter((p) => !winners.includes(p))
+        .filter((p) => {
+          const t = (p.meta?.dropSniper as { trend?: TrendScoreBreakdown } | undefined)?.trend;
+          return (
+            t != null &&
+            t.activeDays >= WINNER_MIN_DAYS &&
+            (t.daysSinceLastSeen == null || t.daysSinceLastSeen <= 7) &&
+            t.tier !== 'saturated'
+          );
+        })
+        .sort((a, b) => this.dropSniperTotal(b) - this.dropSniperTotal(a));
+      winners.push(...extra.slice(0, 10 - winners.length));
+    }
     await writeBoard(
       'winners',
       '*',
@@ -646,19 +574,16 @@ export class ProductsService {
       10,
     );
 
-    const byCountry = new Map<string, Product[]>();
-    for (const p of bySniper) {
-      byCountry.set(p.country, [...(byCountry.get(p.country) ?? []), p]);
-    }
-
-    // Tops por categoría Keepa allowlist (no solo partir el general).
-    // Cada producto pertenece a ingestCategories = browse nodes de donde salió.
+    // Tops por categoría (no solo partir el general). Productos de anuncios
+    // usan las categorías de discovery; semanas Keepa viejas, sus browse nodes.
     const allowlistByMarket = new Map<string, string[]>();
     for (const p of products) {
       if (!allowlistByMarket.has(p.country)) {
         allowlistByMarket.set(
           p.country,
-          this.amazon.ingestCategoryLabels(p.country),
+          p.meta?.discovery
+            ? categoryLabelsForMarket(p.country)
+            : this.amazon.ingestCategoryLabels(p.country),
         );
       }
     }
@@ -694,16 +619,6 @@ export class ProductsService {
       );
     }
 
-    for (const [country, list] of byCountry) {
-      await writeBoard(
-        'country',
-        country,
-        list,
-        (p) => this.dropSniperTotal(p),
-        10,
-      );
-    }
-
     this.logger.log(
       `Rankings week=${weekKey} written: general=${Math.min(10, bySniper.length)} trending=${Math.min(10, trending.length)} winners=${Math.min(10, winners.length)} categories=${categoryKeys.size}`,
     );
@@ -731,13 +646,12 @@ export class ProductsService {
   }
 
   async listBestsellers(
-    market?: string,
     limit = 40,
     view: CatalogView = 'published',
     options: { requireSupplier?: boolean } = {},
   ) {
     const weekKey = await this.resolveWeekKey(view);
-    const rows = await this.productsForWeek(weekKey, market);
+    const rows = await this.productsForWeek(weekKey);
     // Same sourceability gate as rebuildRankings — used by RankingsService's
     // empty-board fallback so it doesn't silently bypass the supplier gate.
     const filtered = options.requireSupplier
@@ -754,9 +668,9 @@ export class ProductsService {
       }));
   }
 
-  async listRisers(market?: string, view: CatalogView = 'published') {
+  async listRisers(view: CatalogView = 'published') {
     const weekKey = await this.resolveWeekKey(view);
-    const products = await this.productsForWeek(weekKey, market);
+    const products = await this.productsForWeek(weekKey);
     const risers = await this.computeRisers(products, weekKey);
 
     return risers.slice(0, 10).map((row) => ({
@@ -865,13 +779,15 @@ export class ProductsService {
         (a, b) => (a.unitPriceEur ?? Infinity) - (b.unitPriceEur ?? Infinity),
       )[0];
     const hasLiveCost = Boolean(cheapestLive);
+    const fromStore = Boolean(product.meta?.discovery);
     // Ad Winners have no Amazon PVP — don't show fake profit vs 0 €
     const profitability =
       hasLiveCost && salePrice > 0
         ? {
             ...this.computeProfitability(salePrice, cheapestLive),
-            formula:
-              'Beneficio estimado = PVP Amazon − coste proveedor − envío − comisiones Amazon (~15%)',
+            formula: fromStore
+              ? 'Beneficio estimado = PVP de la tienda que lo anuncia − coste proveedor (CJ/AliExpress) − envío − comisiones y pasarela (~15%)'
+              : 'Beneficio estimado = PVP Amazon − coste proveedor − envío − comisiones Amazon (~15%)',
             basis: 'Coste de proveedor según oferta enlazada (API).',
             available: true as const,
           }
@@ -886,9 +802,13 @@ export class ProductsService {
             marginPct: null,
             formula:
               'Beneficio = PVP − coste proveedor − envío − comisiones (~15%)',
-            basis: isAdWinner
-              ? 'Ad Winners no tiene PVP Amazon: solo coste de proveedor de referencia.'
-              : 'Margen no disponible: no hay precio real de proveedor (API Alibaba/AliExpress no conectada).',
+            basis: fromStore
+              ? salePrice > 0
+                ? 'Margen no disponible: no hay precio live de CJ/AliExpress para este producto.'
+                : 'Margen no disponible: no se pudo leer el PVP de la tienda.'
+              : isAdWinner
+                ? 'Ad Winners no tiene PVP Amazon: solo coste de proveedor de referencia.'
+                : 'Margen no disponible: no hay precio real de proveedor (API AliExpress no conectada).',
             available: false as const,
             labels: {
               estimatedProfit: 'Beneficio estimado',
@@ -967,19 +887,28 @@ export class ProductsService {
     };
   }
 
-  async listAll(market?: string, view: CatalogView = 'published') {
+  async listAll(view: CatalogView = 'published') {
     const weekKey = await this.resolveWeekKey(view);
-    const products = await this.productsForWeek(weekKey, market);
+    const products = await this.productsForWeek(weekKey);
     return [...products]
       .sort((a, b) => this.scoreProduct(b) - this.scoreProduct(a))
       .map((p) => this.serializeProduct(p));
   }
 
-  keepaStatus() {
-    return this.amazon.getStatus();
+  discoveryEnabled() {
+    return this.discovery.enabled();
   }
 
-  ingestCategoriesForMarket(market?: string) {
-    return this.amazon.ingestCategoryLabels(market);
+  /** Local/dev only: fixture catalogue (no external APIs) when PipiAds is off. */
+  async seedFixtures() {
+    const weekKey = currentWeekKey();
+    const signals = await this.amazon.collectWeeklyCandidates();
+    const products = await this.upsertFromSignals(signals, weekKey);
+    await this.catalog.markIngested(weekKey, [], products.length, 'Fixtures');
+    return { weekKey, count: products.length };
+  }
+
+  ingestCategories() {
+    return categoryLabelsForMarket('ES');
   }
 }

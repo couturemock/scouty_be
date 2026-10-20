@@ -8,24 +8,18 @@ export class ProductsController {
   constructor(private readonly products: ProductsService) {}
 
   @Get('bestsellers')
-  bestsellers(
-    @Query('market') market?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.products.listBestsellers(
-      market,
-      limit ? Number(limit) : 40,
-    );
+  bestsellers(@Query('limit') limit?: string) {
+    return this.products.listBestsellers(limit ? Number(limit) : 40);
   }
 
   @Get()
-  list(@Query('market') market?: string) {
-    return this.products.listAll(market);
+  list() {
+    return this.products.listAll();
   }
 
   @Get('risers/weekly')
-  risers(@Query('market') market?: string) {
-    return this.products.listRisers(market);
+  risers() {
+    return this.products.listRisers();
   }
 
   @Get(':id')

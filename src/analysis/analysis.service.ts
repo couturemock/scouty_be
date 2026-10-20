@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CreativeIntelligenceService } from '../creative/creative-intelligence.service';
 import { productQueryTokens } from '../integrations/ads/ad-engagement';
+import { shipToCountry } from '../common/ship-to';
 import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
 import { SupabaseStorageProvider } from '../integrations/storage/supabase-storage.provider';
 import { CommercialSignal, CreativeAd, SupplierOffer } from '../integrations/types';
@@ -136,7 +137,7 @@ export class AnalysisService {
   }
 
   /** Candidate supplier title -> Amazon search term. Keeps brand tokens
-   * (unlike supplierSearchKeywords, which drops them for AE/Alibaba search) —
+   * (unlike supplierSearchKeywords, which drops them for AliExpress search) —
    * a brand name is exactly what makes a Keepa keyword search land on the
    * right product instead of a same-category competitor. */
   private amazonSearchTermFromCandidate(title: string, maxWords = 6): string {
@@ -178,10 +179,13 @@ export class AnalysisService {
     user: User,
     input: { type: AnalysisInputType; value: string; findCheaper?: boolean },
   ) {
-    await this.usage.assertAndIncrement(user, 'analysis');
+    await this.usage.assertAndIncrement(
+      user,
+      input.type === 'text' ? 'search' : 'analysis',
+    );
 
     let titleHint = this.extractTitle(input.value, input.type);
-    const market = user.targetMarket || 'ES';
+    const market = shipToCountry();
 
     let amazonSignal: CommercialSignal | null = null;
     let imageMatches: SupplierOffer[] = [];
@@ -199,7 +203,7 @@ export class AnalysisService {
         });
       storedInputValue = uploadedUrl;
 
-      imageMatches = await this.suppliers.identifyByImage(uploadedUrl, 5);
+      imageMatches = await this.suppliers.identifyByImage(uploadedUrl, 5, market);
       const identified = await this.identifyAmazonProductFromImage(imageMatches, market);
       if (identified) {
         amazonSignal = identified.signal;
@@ -261,17 +265,27 @@ export class AnalysisService {
     let supplierOffers: Awaited<
       ReturnType<SuppliersService['findRelated']>
     > = [];
-    try {
-      supplierOffers = await this.suppliers.findRelated(
-        productTitle,
-        6,
-        salePrice ?? undefined,
-        market,
-        amazonSignal.imageUrl ?? savedProduct?.imageUrl,
-      );
-    } catch (err) {
-      // Soft-fail: keep search-link UX if RapidAPI quota/network blows up
-      supplierOffers = [];
+    // `upsertFromSignals` already ran `suppliers.findRelated` for this exact
+    // product (same title/price/market/image) and cached the result on
+    // `product.meta.suppliers` — reuse it instead of paying for the same
+    // AliExpress/CJ lookup twice in one analysis.
+    const cachedOffers = (savedProduct?.meta as { suppliers?: SupplierOffer[] } | undefined)
+      ?.suppliers;
+    if (cachedOffers?.length) {
+      supplierOffers = cachedOffers;
+    } else {
+      try {
+        supplierOffers = await this.suppliers.findRelated(
+          productTitle,
+          6,
+          salePrice ?? undefined,
+          market,
+          amazonSignal.imageUrl ?? savedProduct?.imageUrl,
+        );
+      } catch (err) {
+        // Soft-fail: keep search-link UX if RapidAPI quota/network blows up
+        supplierOffers = [];
+      }
     }
     const live = [...supplierOffers]
       .filter((s) => s.kind === 'live' && s.unitPriceEur != null)

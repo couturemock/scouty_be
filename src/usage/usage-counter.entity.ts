@@ -12,6 +12,7 @@ import { User } from '../users/user.entity';
 
 export type UsageKind =
   | 'analysis'
+  | 'search'
   | 'creative_intelligence'
   | 'rankings_view';
 

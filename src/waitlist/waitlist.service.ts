@@ -39,12 +39,14 @@ export class WaitlistService {
       basic: {
         id: 'basic' as const,
         name: PLANS.basic.name,
-        monthly: PLANS.basic.monthlyEur,
+        price: PLANS.basic.priceEur,
+        months: PLANS.basic.billingMonths,
       },
       pro: {
         id: 'pro' as const,
         name: PLANS.pro.name,
-        monthly: PLANS.pro.monthlyEur,
+        price: PLANS.pro.priceEur,
+        months: PLANS.pro.billingMonths,
       },
     };
   }

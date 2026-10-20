@@ -1,3 +1,9 @@
+import {
+  computeTrendScoreForProduct,
+  isTrendingDiscovery,
+  isWinnerDiscovery,
+  TrendScoreBreakdown,
+} from '../discovery/trend-score';
 import { AdClusterScore } from '../integrations/ads/ad-score';
 import { computeImpulseSignal, ImpulseSignal } from './impulse-filter';
 import { Product } from './product.entity';
@@ -8,15 +14,18 @@ import {
 } from './supplier-signals';
 
 /**
- * Drop Sniper Score 0–100:
- * 20% Amazon momentum (7d + 30d)
- * 15% Amazon demand
- * 28% Ad Score (0 if no live ads) — ads are the primary discovery radar
- * 12% AliExpress / Alibaba market signal
- * 12% supplier + margin (sourceability itself is a hard board-inclusion gate,
+ * Drop Sniper Score 0–100 — discovery engine is Meta/TikTok Ads + AliExpress;
+ * Amazon/Keepa is a secondary confirmation signal, not a requirement (see
+ * isTrendingCandidate/isWinnerCandidate below, which qualify ads-only
+ * products via `tier` instead of gating on Amazon demand):
+ * 38% Ad Score (0 if no live ads) — ads are the primary discovery radar
+ * 18% AliExpress market signal (volume + live offer count)
+ * 13% supplier + margin (sourceability itself is a hard board-inclusion gate,
  *     see hasAnySupplier — this weight is about margin quality, not presence)
+ * 8% Amazon momentum (7d + 30d) — confirmation only, never required
+ * 6% Amazon demand — confirmation only, never required
  * 3% competition
- * 10% impulse-product quality read (informational signal, see impulse-filter.ts)
+ * 14% impulse-product quality read (informational signal, see impulse-filter.ts)
  * + agreement bonus 0–10 when independent sources agree
  */
 
@@ -51,10 +60,19 @@ export type DropSniperBreakdown = {
   liveSupplierCount: number;
   tier: ProductTier;
   tierReasons: string[];
-  badges: { amazon: boolean; ads: boolean; aliexpress: boolean };
+  badges: {
+    amazon: boolean;
+    ads: boolean;
+    aliexpress: boolean;
+    tiktok?: boolean;
+    meta?: boolean;
+    cj?: boolean;
+  };
   impulseSignal: ImpulseSignal;
   /** @deprecated use ads; kept for older snapshots */
   crossBonus: number;
+  /** Present for ads-discovered products (weekly PipiAds snapshot). */
+  trend?: TrendScoreBreakdown;
 };
 
 const AD_STRONG = 40;
@@ -211,20 +229,35 @@ function agreementBonus(
  * TRENDING: 7d and/or 30d growth — not necessarily top demand. Pure Amazon
  * momentum signal; no live supplier required (that's an opportunity-board
  * concern, not a "is this trending" one — gating on it here starved
- * categories whenever AliExpress/Alibaba quota ran out mid-ingest).
+ * categories whenever AliExpress quota ran out mid-ingest).
+ *
+ * Amazon growth is one way in, not the only one: `tier === 'early_winner'`
+ * is the ads-driven "despegando" signal (multi-store ad pressure building,
+ * sourceable on AliExpress) computed by computeProductTier below — Amazon
+ * presence is optional there, so an ads-only product can be TRENDING too.
  */
 export function isTrendingCandidate(p: Product, sniper: DropSniperBreakdown) {
+  if (sniper.trend) return isTrendingDiscovery(sniper.trend);
   const g7 = growth7(p);
   const g30 = growth30(p);
-  return sniper.momentum >= 25 || g7 >= 10 || g30 >= 8;
+  if (sniper.momentum >= 25 || g7 >= 10 || g30 >= 8) return true;
+  return sniper.tier === 'early_winner';
 }
 
-/** WINNERS: high demand sustained (90d drops / monthly sold), not a 7d spike. */
+/**
+ * WINNERS: sustained demand, not a 7d spike. Either Amazon-confirmed (90d
+ * drops / monthly sold) OR ads-confirmed (`tier === 'proven_winner'`: strong,
+ * broad ad presence sustained over time) — Amazon is a confirmation path,
+ * not a requirement.
+ */
 export function isWinnerCandidate(p: Product, sniper: DropSniperBreakdown) {
+  if (sniper.trend) return isWinnerDiscovery(sniper.trend);
   const sales = Number(p.estimatedSales ?? 0);
   const drops90 = numMeta(p, 'salesRankDrops90');
-  const sustained = sales >= 50 || drops90 >= 20 || sniper.demand >= 55;
-  return sniper.demand >= 40 && sustained;
+  const sustainedAmazon =
+    sniper.demand >= 40 && (sales >= 50 || drops90 >= 20 || sniper.demand >= 55);
+  if (sustainedAmazon) return true;
+  return sniper.tier === 'proven_winner';
 }
 
 export function sourceBadges(sniper: DropSniperBreakdown): {
@@ -300,7 +333,52 @@ export function computeProductTier(
   return { tier: 'unclassified', reasons: [] };
 }
 
+const TREND_TIER_TO_PRODUCT_TIER: Record<TrendScoreBreakdown['tier'], ProductTier> = {
+  trending: 'early_winner',
+  winner: 'proven_winner',
+  saturated: 'saturated',
+  testing: 'unclassified',
+};
+
+/** Ads-discovered product: Trend Score replaces the Keepa-based parts. */
+function dropSniperFromTrend(p: Product, trend: TrendScoreBreakdown): DropSniperBreakdown {
+  const live = liveSuppliers(p);
+  const aeSignal = computeAliExpressMarketSignal(p);
+  const impulseSignal = computeImpulseSignal(p);
+  const platforms = (p.meta?.discovery as { platforms?: string[] } | undefined)?.platforms ?? [];
+  return {
+    total: trend.total,
+    momentum: trend.velocity,
+    demand: trend.stores,
+    supplier: trend.supplier,
+    competition: Number((100 - trend.saturation).toFixed(2)),
+    ads: trend.engagement,
+    aliexpress: aeSignal.total,
+    amazon: 0,
+    agreement: trend.crossPlatformBonus,
+    impulse: impulseSignal.score,
+    viable: hasViableSupplier(p),
+    sourceable: hasAnySupplier(p),
+    liveSupplierCount: live.length,
+    tier: TREND_TIER_TO_PRODUCT_TIER[trend.tier],
+    tierReasons: trend.reasons,
+    badges: {
+      amazon: false,
+      ads: true,
+      aliexpress: live.some((o) => o.source === 'aliexpress'),
+      tiktok: platforms.includes('tiktok'),
+      meta: platforms.some((x) => x === 'facebook' || x === 'instagram'),
+      cj: live.some((o) => o.source === 'cj'),
+    },
+    impulseSignal,
+    crossBonus: trend.engagement,
+    trend,
+  };
+}
+
 export function computeDropSniperScore(p: Product): DropSniperBreakdown {
+  const trend = computeTrendScoreForProduct(p);
+  if (trend) return dropSniperFromTrend(p, trend);
   const liveSupplierCount = liveSuppliers(p).length;
   const viable = hasViableSupplier(p);
   const sourceable = hasAnySupplier(p);
@@ -322,13 +400,13 @@ export function computeDropSniperScore(p: Product): DropSniperBreakdown {
   // `sourceable` (cualquier proveedor live) es un requisito duro para TODOS los
   // tableros a nivel de products.service.ts — acá solo se reporta, no se gatea.
   const weighted =
-    momentum * 0.2 +
-    demand * 0.15 +
-    ads * 0.28 +
-    aliexpress * 0.12 +
-    supplier * 0.12 +
+    momentum * 0.08 +
+    demand * 0.06 +
+    ads * 0.38 +
+    aliexpress * 0.18 +
+    supplier * 0.13 +
     competition * 0.03 +
-    impulse * 0.1 +
+    impulse * 0.14 +
     agreement;
 
   const breakdown: DropSniperBreakdown = {

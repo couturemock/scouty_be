@@ -6,11 +6,15 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser } from '../common/decorators';
-import { KeepaAmazonProvider } from '../integrations/amazon/keepa.provider';
+import { BUCKET_SHARES } from '../discovery/credit-budget';
+import {
+  MAX_PRODUCTS_TARGET,
+  TrendDiscoveryService,
+} from '../discovery/trend-discovery.service';
 import { PipiAdsProvider } from '../integrations/pipiads/pipiads.provider';
+import { SuppliersService } from '../integrations/suppliers/suppliers.service';
 import { IngestionQueueService } from '../jobs/ingestion-queue.service';
 import { ProductsService } from '../products/products.service';
 import { User } from '../users/user.entity';
@@ -23,19 +27,16 @@ export class AdminCatalogController {
   constructor(
     private readonly catalog: CatalogService,
     private readonly products: ProductsService,
-    private readonly keepa: KeepaAmazonProvider,
     private readonly pipiads: PipiAdsProvider,
-    private readonly config: ConfigService,
+    private readonly suppliers: SuppliersService,
+    private readonly discovery: TrendDiscoveryService,
     private readonly ingestQueue: IngestionQueueService,
   ) {}
 
   @Get('status')
   async status() {
     const state = await this.catalog.status();
-    const [keepa, pipiads] = await Promise.all([
-      this.keepa.getStatus(),
-      this.pipiads.getStatus(),
-    ]);
+    const pipiads = await this.pipiads.getStatus();
     const publishedCount = state.publishedWeekKey
       ? await this.products.countForWeek(state.publishedWeekKey)
       : 0;
@@ -44,14 +45,15 @@ export class AdminCatalogController {
       : 0;
     return {
       ...state,
-      keepa,
       pipiads,
+      suppliers: this.suppliers.status(),
       defaults: {
-        productsPerCategory: Number(
-          this.config.get('KEEPA_PRODUCTS_PER_CATEGORY') ?? 15,
-        ),
-        ciTopN: Number(this.config.get('CI_SNAPSHOT_TOP_N') ?? 30),
-        markets: keepa.markets ?? [],
+        productsTarget: this.discovery.productsTarget(),
+        maxProductsTarget: MAX_PRODUCTS_TARGET,
+        creditBudget: this.discovery.creditBudget(),
+        regions: this.discovery.regions(),
+        shipTo: this.discovery.shipTo(),
+        creditShares: BUCKET_SHARES,
       },
       publishedCount,
       draftCount,
@@ -60,62 +62,34 @@ export class AdminCatalogController {
 
   /** Historial de snapshots, más reciente primero. */
   @Get('snapshots')
-  async snapshots() {
-    const rows = await this.catalog.listSnapshots();
-    const withAdWinners = await this.products.weekKeysWithAdWinners(
-      rows.map((r) => r.weekKey),
-    );
-    return rows.map((row) => ({
-      ...row,
-      hasAdWinners: withAdWinners.has(row.weekKey),
-    }));
+  snapshots() {
+    return this.catalog.listSnapshots();
   }
 
   /**
-   * Reintenta solo Ad Winners (PipiAds → Ad Score) para un weekKey ya
-   * ingerido, sin repetir Keepa/CI. Si no se pasan markets, usa los de ese
-   * snapshot.
-   */
-  @Post('rerun-ad-winners')
-  async rerunAdWinners(
-    @Query('weekKey') weekKey: string,
-    @Query('markets') markets?: string,
-  ) {
-    const explicit = markets
-      ?.split(',')
-      .map((m) => m.trim().toUpperCase())
-      .filter(Boolean);
-    let list = explicit ?? [];
-    if (!list.length) {
-      const rows = await this.catalog.listSnapshots();
-      list = rows.find((r) => r.weekKey === weekKey)?.markets ?? [];
-    }
-    return this.products.rerunAdWinners(weekKey, list);
-  }
-
-  /**
-   * Encola una ingesta Keepa → borrador; corre en el worker de background
+   * Encola el snapshot semanal (PipiAds → filtro dropshipping → tienda →
+   * CJ/AliExpress) → borrador; corre en el worker de background
    * (Redis/BullMQ), no bloquea esta request. Seguí el progreso con
    * GET ingest-status.
-   * Query: markets, productsPerCategory (ASINs por categoría Keepa), ciTopN (CI PipiAds).
+   * Query: productsTarget (productos del snapshot, máx. 200),
+   * creditBudget (créditos PipiAds del run).
    */
   @Post('ingest')
   async ingest(
-    @Query('markets') markets?: string,
-    @Query('productsPerCategory') productsPerCategory?: string,
-    @Query('ciTopN') ciTopN?: string,
+    @Query('productsTarget') productsTarget?: string,
+    @Query('creditBudget') creditBudget?: string,
   ) {
-    const list = markets
-      ?.split(',')
-      .map((m) => m.trim().toUpperCase())
-      .filter(Boolean);
-    const perCat = productsPerCategory ? Number(productsPerCategory) : undefined;
-    const topN = ciTopN ? Number(ciTopN) : undefined;
+    const target = productsTarget ? Number(productsTarget) : undefined;
+    const budget = creditBudget ? Number(creditBudget) : undefined;
     const { jobId, alreadyRunning } = await this.ingestQueue.enqueue({
-      markets: list,
-      productsPerCategory:
-        perCat != null && Number.isFinite(perCat) ? perCat : undefined,
-      ciTopN: topN != null && Number.isFinite(topN) ? topN : undefined,
+      productsTarget:
+        target != null && Number.isFinite(target) && target > 0
+          ? Math.min(Math.floor(target), MAX_PRODUCTS_TARGET)
+          : undefined,
+      creditBudget:
+        budget != null && Number.isFinite(budget) && budget > 0
+          ? Math.floor(budget)
+          : undefined,
     });
     return {
       queued: true,
@@ -147,14 +121,7 @@ export class AdminCatalogController {
 
   /** Vista previa del borrador antes de publicar. */
   @Get('preview')
-  preview(
-    @Query('market') market?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.products.listBestsellers(
-      market,
-      limit ? Number(limit) : 20,
-      'draft',
-    );
+  preview(@Query('limit') limit?: string) {
+    return this.products.listBestsellers(limit ? Number(limit) : 20, 'draft');
   }
 }

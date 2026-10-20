@@ -4,7 +4,7 @@ import { WorkerModule } from './worker/worker.module';
 
 /**
  * Background worker entrypoint — no HTTP listener. Processes ingestion jobs
- * (Keepa/CI/Ad Winners) and the waitlist-expiry cron from Redis/BullMQ,
+ * (weekly PipiAds snapshot) and the waitlist-expiry cron from Redis/BullMQ,
  * decoupled from the web process so a long ingestion never ties up the API.
  * Run alongside the API with `npm run start:worker` (see backend/README or
  * docker-compose.yml's `worker` service).

@@ -6,9 +6,9 @@ import { Product } from '../products/product.entity';
 import { ProductsService } from '../products/products.service';
 
 /**
- * No auto-ingest Keepa on boot (gasta tokens).
- * Si la DB está vacía y Keepa está off, carga fixtures y publica automáticamente.
- * Con Keepa on, el admin llama POST /api/admin/catalog/ingest y luego /publish.
+ * No auto-ingest on boot (gasta créditos PipiAds).
+ * Si la DB está vacía y PipiAds está off, carga fixtures y publica automáticamente.
+ * Con PipiAds on, el admin llama POST /api/admin/catalog/ingest y luego /publish.
  */
 @Injectable()
 export class SeedService implements OnModuleInit {
@@ -38,16 +38,14 @@ export class SeedService implements OnModuleInit {
       return;
     }
 
-    const status = await this.products.keepaStatus();
-    if (status.enabled) {
+    if (this.products.discoveryEnabled()) {
       this.logger.log(
-        'DB vacía + Keepa activo. Admin: POST /api/admin/catalog/ingest?markets=ES,US',
+        'DB vacía + PipiAds activo. Admin: POST /api/admin/catalog/ingest?markets=ES&productsTarget=50',
       );
       return;
     }
-
-    this.logger.log('Seeding fixtures (Keepa desactivado) + auto-publish');
-    const result = await this.products.runWeeklyIngestion();
+    this.logger.log('Seeding fixtures (PipiAds desactivado) + auto-publish');
+    const result = await this.products.seedFixtures();
     await this.catalog.publish(result.weekKey, 'seed@system');
   }
 }

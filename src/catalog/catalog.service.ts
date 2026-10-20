@@ -90,7 +90,7 @@ export class CatalogService {
     const target = weekKey ?? state.draftWeekKey;
     if (!target) {
       throw new ForbiddenException(
-        'No hay snapshot borrador. Ejecuta una ingesta Keepa primero.',
+        'No hay snapshot borrador. Ejecuta una ingesta primero.',
       );
     }
 

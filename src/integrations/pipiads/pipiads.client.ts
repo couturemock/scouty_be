@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PipiAdsCacheService } from './pipiads-cache.service';
 
 export interface PipiAdsApiResult<T = unknown> {
   code: number;
@@ -7,13 +8,19 @@ export interface PipiAdsApiResult<T = unknown> {
   data: T;
 }
 
+const DEFAULT_LIST_TTL_SEC = 6 * 60 * 60; // /adspy/list changes fast — short TTL
+const DEFAULT_DETAIL_TTL_SEC = 7 * 24 * 60 * 60; // a given ad's detail doesn't change — long TTL
+
 @Injectable()
 export class PipiAdsClient {
   private readonly logger = new Logger(PipiAdsClient.name);
   private readonly baseUrl: string;
   private readonly apiKey: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    private readonly cache: PipiAdsCacheService,
+  ) {
     this.baseUrl =
       this.config.get<string>('PIPIADS_BASE_URL') ?? 'https://www.pipispy.com';
     this.apiKey = this.config.get<string>('PIPIADS_API_KEY') ?? '';
@@ -81,10 +88,43 @@ export class PipiAdsClient {
     uri: string,
     params: Record<string, unknown>,
   ): Promise<T> {
+    return (await this.callWithMeta<T>(uri, params)).data;
+  }
+
+  /**
+   * Same as `call`, plus the credits the request actually consumed.
+   * Cached + in-flight-deduped per (uri, params): a cache hit or a deduped
+   * concurrent call reports `consumed: 0` — only the one real HTTP request
+   * that actually paid PipiAds reports its real cost.
+   */
+  async callWithMeta<T = unknown>(
+    uri: string,
+    params: Record<string, unknown>,
+  ): Promise<{ data: T; consumed: number | null; remaining: number | null }> {
     if (!this.apiKey) {
       throw new Error('PIPIADS_API_KEY no configurada');
     }
 
+    const ttlSec = this.cacheTtlFor(uri);
+    const cacheKey = this.cache.key(uri, params);
+    const { data, consumed, remaining } = await this.cache.getOrFetch<T>(cacheKey, ttlSec, () =>
+      this.rawCall<T>(uri, params),
+    );
+    return { data, consumed, remaining };
+  }
+
+  private cacheTtlFor(uri: string): number {
+    const isDetail = uri.includes('detail');
+    const configKey = isDetail ? 'PIPIADS_CACHE_TTL_DETAIL_SEC' : 'PIPIADS_CACHE_TTL_LIST_SEC';
+    const fallback = isDetail ? DEFAULT_DETAIL_TTL_SEC : DEFAULT_LIST_TTL_SEC;
+    const n = Number(this.config.get(configKey) ?? fallback);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
+  private async rawCall<T = unknown>(
+    uri: string,
+    params: Record<string, unknown>,
+  ): Promise<{ data: T; consumed: number | null; remaining: number | null }> {
     const url = `${this.baseUrl}/open-api/v1/data`;
     const response = await fetch(url, {
       method: 'POST',
@@ -99,13 +139,22 @@ export class PipiAdsClient {
       throw new Error(`PipiAds HTTP ${response.status}: ${response.statusText}`);
     }
 
-    const result = (await response.json()) as PipiAdsApiResult<T>;
+    const result = (await response.json()) as PipiAdsApiResult<T> & {
+      consumed_credits?: number;
+      remaining_credits?: number;
+    };
     if (result.code !== 200) {
       throw new Error(
         `PipiAds API ${result.code}: ${result.message ?? 'Error desconocido'}`,
       );
     }
 
-    return result.data;
+    const consumed = Number(result.consumed_credits);
+    const remaining = Number(result.remaining_credits);
+    return {
+      data: result.data,
+      consumed: Number.isFinite(consumed) ? consumed : null,
+      remaining: Number.isFinite(remaining) ? remaining : null,
+    };
   }
 }

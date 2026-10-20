@@ -91,9 +91,24 @@ export function adLikeCount(ad: CreativeAd): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Prefer views; likes break ties (weighted lightly). */
+export function adCommentCount(ad: CreativeAd): number {
+  const n = Number(ad.publicSignals?.commentCount ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export function adShareCount(ad: CreativeAd): number {
+  const n = Number(ad.publicSignals?.shareCount ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Prefer views; likes/comments/shares break ties (weighted lightly). */
 export function adEngagementScore(ad: CreativeAd): number {
-  return adPlayCount(ad) + adLikeCount(ad) * 20;
+  return (
+    adPlayCount(ad) +
+    adLikeCount(ad) * 20 +
+    adCommentCount(ad) * 40 +
+    adShareCount(ad) * 40
+  );
 }
 
 export function sortAdsByEngagement(ads: CreativeAd[]): CreativeAd[] {

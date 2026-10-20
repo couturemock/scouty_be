@@ -15,30 +15,29 @@ export class IngestionProcessor extends WorkerHost {
   }
 
   async process(job: Job<IngestionJobData>): Promise<IngestionJobResult> {
-    const { markets, productsPerCategory, ciTopN } = job.data ?? {};
+    const { productsTarget, creditBudget } = job.data ?? {};
     this.logger.log(
-      `Ingestion job ${job.id} started markets=${markets?.join(',') ?? 'default'}`,
+      `Ingestion job ${job.id} started productsTarget=${productsTarget ?? 'env'} creditBudget=${creditBudget ?? 'env'}`,
     );
-    const result = await this.products.runWeeklyIngestion(markets, {
-      productsPerCategory,
-      ciTopN,
+    const result = await this.products.runWeeklyIngestion({
+      productsTarget,
+      creditBudget,
       onProgress: (progress) => {
         void job.updateProgress(progress);
       },
     });
     this.logger.log(
-      `Ingestion job ${job.id} done weekKey=${result.weekKey} count=${result.count} ` +
-        `ci=${result.creativeIntelligence.enriched}/${result.creativeIntelligence.totalCredits}cr ` +
-        `adWinners=${result.adWinners.ranked}/${result.adWinners.credits}cr`,
+      `Ingestion job ${job.id} done weekKey=${result.weekKey} count=${result.count} credits=${result.discovery.credits}`,
     );
     return {
       weekKey: result.weekKey,
       count: result.count,
-      creativeIntelligence: {
-        enriched: result.creativeIntelligence.enriched,
-        totalCredits: result.creativeIntelligence.totalCredits,
+      discovery: {
+        credits: result.discovery.credits,
+        saved: result.discovery.result.saved,
+        withSupplier: result.discovery.result.withSupplier,
+        pipiadsRemaining: result.discovery.pipiadsRemaining,
       },
-      adWinners: result.adWinners,
     };
   }
 }

@@ -1,8 +1,4 @@
 import { IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
-import { AMAZON_MARKETS } from '../../common/amazon-markets';
-
-const MARKET_CODES = AMAZON_MARKETS.map((m) => m.code);
-
 export class RegisterDto {
   @IsEmail()
   email!: string;
@@ -18,10 +14,6 @@ export class RegisterDto {
   @IsOptional()
   @IsIn(['basic', 'pro'])
   plan?: 'basic' | 'pro';
-
-  @IsOptional()
-  @IsIn(MARKET_CODES)
-  targetMarket?: string;
 
   /** Invite token from waitlist access email. */
   @IsOptional()

@@ -63,10 +63,7 @@ export class User {
   @Column({ default: false })
   cancelAtPeriodEnd!: boolean;
 
-  /**
-   * Target Amazon marketplace for rankings/analysis (US, ES, DE, …).
-   * Basic: one market. Pro: can switch freely; country boards unlocked separately.
-   */
+  /** Unused since the catalogue went global; kept so existing rows keep their column. */
   @Column({ type: 'varchar', default: 'ES' })
   targetMarket!: string;
 

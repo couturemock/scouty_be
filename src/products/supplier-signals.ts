@@ -25,7 +25,7 @@ export function hasViableSupplier(p: Product, minMarginPct = 8): boolean {
 /**
  * Sourceable at all — any live supplier offer, no margin floor. Every board
  * (general/trending/winners, not just margin/profit) requires this: every
- * product shown must be findable on AliExpress/Alibaba.
+ * product shown must be findable on AliExpress.
  */
 export function hasAnySupplier(p: Product): boolean {
   return liveSuppliers(p).length > 0;

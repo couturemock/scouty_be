@@ -1,6 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { planById } from '../common/plans';
 import { Product } from '../products/product.entity';
 import { ProductsService } from '../products/products.service';
 import { User } from '../users/user.entity';
@@ -35,6 +40,15 @@ export class WatchlistService {
       where: { userId: user.id, productId },
     });
     if (!item) {
+      const limit = planById(user.plan).savedProductsLimit;
+      if (limit !== null) {
+        const saved = await this.items.count({ where: { userId: user.id } });
+        if (saved >= limit) {
+          throw new ForbiddenException(
+            `Puedes guardar hasta ${limit} productos en tu plan. Mejora a Pro para guardar sin límite.`,
+          );
+        }
+      }
       item = await this.items.save(
         this.items.create({ userId: user.id, productId }),
       );

@@ -30,7 +30,7 @@ describe('supplier-signals', () => {
     const p = product({
       meta: {
         suppliers: [
-          { source: 'alibaba', name: 'link-only', listingUrl: 'https://alibaba.com/search', kind: 'estimated' },
+          { source: 'aliexpress', name: 'link-only', listingUrl: 'https://aliexpress.com/search', kind: 'estimated' },
         ],
       },
     });

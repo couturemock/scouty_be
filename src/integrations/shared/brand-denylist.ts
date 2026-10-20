@@ -1,7 +1,7 @@
 /**
  * Shared big-brand denylist — single source of truth.
- * Previously duplicated (with drifting brand lists) across product-filters.ts,
- * aliexpress.provider.ts and alibaba-com.provider.ts.
+ * Previously duplicated (with drifting brand lists) across product-filters.ts
+ * and aliexpress.provider.ts.
  */
 
 /**

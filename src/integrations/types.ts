@@ -29,7 +29,7 @@ export interface CommercialSignal {
 }
 
 export interface SupplierOffer {
-  source: 'alibaba' | '1688' | 'aliexpress';
+  source: 'aliexpress' | 'cj';
   name: string;
   listingUrl: string;
   unitPriceEur?: number;
@@ -44,6 +44,16 @@ export interface SupplierOffer {
   /** Orders / sold / Otapi Volume — estimated marketplace activity, never invented. */
   soldCount?: number;
   popularity?: number;
+  /** CJ `listedNum`: how many stores already imported this product. */
+  listedCount?: number;
+  /** Stock in a US/EU warehouse (CJ) — ships in days, not weeks. */
+  fastShipping?: boolean;
+  imageUrl?: string;
+  /** CJ variant id, needed for freight calculation. */
+  variantId?: string;
+  externalId?: string;
+  /** How the offer was found; keyword hits need a stricter title check than image hits. */
+  matchedBy?: 'keyword' | 'image';
 }
 
 export interface CreativeAd {

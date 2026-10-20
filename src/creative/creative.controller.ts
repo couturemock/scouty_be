@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
 import { CurrentUser } from '../common/decorators';
 import { SubscriptionGuard } from '../auth/subscription.guard';
@@ -34,9 +34,9 @@ export class CreativeController {
 
   /** Productos del snapshot publicado que ya tienen creatividades (Top N del ingest). */
   @Get('catalog')
-  async listCatalog(@Query('market') market?: string) {
+  async listCatalog() {
     await this.catalog.assertPublished();
-    const rows = await this.products.listBestsellers(market, 50);
+    const rows = await this.products.listBestsellers(50);
     return rows
       .map((row) => {
         const stored = this.creativeIntelligence.getStored(row.product);

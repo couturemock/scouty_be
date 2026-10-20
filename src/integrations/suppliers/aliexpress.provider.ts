@@ -4,7 +4,7 @@ import { SupplierOffer } from '../types';
 import { supplierSearchKeywords } from './search-keywords';
 import { isLikelyBranded } from '../shared/brand-denylist';
 
-type AeProduct = Record<string, unknown>;
+type AeItem = Record<string, unknown>;
 
 function round2(n: number) {
   return Number(n.toFixed(2));
@@ -25,128 +25,121 @@ function asNumber(v: unknown): number | null {
   return null;
 }
 
-function pickPrice(p: AeProduct): number | null {
-  return (
-    asNumber(p.target_sale_price) ??
-    asNumber(p.sale_price) ??
-    asNumber(p.target_sale_price_cents) ??
-    asNumber(p.app_sale_price) ??
-    null
-  );
+/** `"10,000+"` / `"48500+"` → 10000 / 48500. Never invented — null when absent. */
+function parseVolume(v: unknown): number | null {
+  if (v == null) return null;
+  const n = Number(String(v).replace(/[^\d]/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-function pickTitle(p: AeProduct): string {
-  return String(
-    p.product_title ?? p.title ?? p.product_main_image_url ?? 'AliExpress',
-  ).slice(0, 120);
+function itemUrl(itemId: unknown): string | null {
+  const id = String(itemId ?? '').trim();
+  return id ? `https://www.aliexpress.com/item/${id}.html` : null;
 }
 
-function pickUrl(p: AeProduct): string | null {
-  const id = p.product_id ?? p.productId ?? p.itemId;
-  const direct = p.product_detail_url ?? p.detail_url ?? p.product_url ?? p.url;
-  if (typeof direct === 'string' && direct.startsWith('http')) return direct;
-  if (id != null && String(id).trim()) {
-    return `https://www.aliexpress.com/item/${String(id)}.html`;
-  }
-  return null;
+/** `textsearch.php` result item (search by keyword). */
+function mapTextSearchItem(raw: AeItem, salePriceEur?: number): SupplierOffer | null {
+  const price =
+    asNumber(raw.targetSalePrice) ?? asNumber(raw.salePrice) ?? null;
+  const listingUrl = itemUrl(raw.itemId);
+  if (price == null || price <= 0 || !listingUrl) return null;
+  if (salePriceEur != null && price >= salePriceEur * 0.9) return null;
+
+  const sold = parseVolume(raw.orders);
+  return {
+    source: 'aliexpress',
+    name: String(raw.title ?? 'AliExpress').slice(0, 120),
+    listingUrl,
+    unitPriceEur: round2(price),
+    shippingEstimateEur: undefined,
+    leadTimeDays: 12,
+    reliabilityScore: 70,
+    region: 'AliExpress',
+    kind: 'live',
+    soldCount: sold ?? undefined,
+    popularity: sold ?? undefined,
+    note: 'Precio AliExpress (Business API). Match por keyword — verificá que sea el mismo producto.',
+  };
 }
 
-/** lastest_volume / orders from Affiliate-style payloads — never invented. */
-function pickSold(p: AeProduct): number | null {
-  return (
-    asNumber(p.lastest_volume) ??
-    asNumber(p.latest_volume) ??
-    asNumber(p.last_volume) ??
-    asNumber(p.volume) ??
-    asNumber(p.orders) ??
-    asNumber(p.order_count) ??
-    asNumber(p.historical_sold) ??
-    asNumber(p.sold) ??
-    asNumber(p.sales) ??
-    null
-  );
+/** `imageurl_search.php` result item (search by image). */
+function mapImageSearchItem(raw: AeItem, salePriceEur?: number): SupplierOffer | null {
+  const priceRaw = asNumber(raw.target_sale_price);
+  // Unlike textsearch.php (decimal strings like "3.99"), this endpoint
+  // returns target_sale_price as a whole-number string in cents (e.g. "406"
+  // for a $4.06 item) — confirmed by cross-checking the same itemId between
+  // both endpoints, and by a 20-item sample all landing in plausible cents
+  // ranges once divided. A literal decimal value (already scaled) passes
+  // through unchanged.
+  const price =
+    priceRaw != null && Number.isInteger(priceRaw) ? priceRaw / 100 : priceRaw;
+  const listingUrl =
+    typeof raw.product_detail_url === 'string' && raw.product_detail_url.startsWith('http')
+      ? raw.product_detail_url
+      : itemUrl(raw.product_id);
+  if (price == null || price <= 0 || !listingUrl) return null;
+  if (salePriceEur != null && price >= salePriceEur * 0.9) return null;
+
+  const sold = parseVolume(raw.latest_volume);
+  return {
+    source: 'aliexpress',
+    name: String(raw.product_title ?? 'AliExpress').slice(0, 120),
+    listingUrl,
+    unitPriceEur: round2(price),
+    shippingEstimateEur: undefined,
+    leadTimeDays: 12,
+    reliabilityScore: 65,
+    region: 'AliExpress',
+    kind: 'live',
+    soldCount: sold ?? undefined,
+    popularity: sold ?? undefined,
+    matchedBy: 'image',
+    note: 'Precio AliExpress (Business API). Match por imagen — verificá bien el listing.',
+  };
 }
 
-function mapAeOffers(
-  list: AeProduct[],
-  limit: number,
-  salePriceEur?: number,
-): SupplierOffer[] {
-  const offers: SupplierOffer[] = [];
-  const seen = new Set<string>();
-
-  for (const raw of list) {
-    const price = pickPrice(raw);
-    const listingUrl = pickUrl(raw);
-    if (price == null || price <= 0 || !listingUrl) continue;
-    if (salePriceEur != null && price >= salePriceEur * 0.9) continue;
-    if (seen.has(listingUrl)) continue;
-    seen.add(listingUrl);
-
-    const sold = pickSold(raw);
-    offers.push({
-      source: 'aliexpress',
-      name: pickTitle(raw),
-      listingUrl,
-      unitPriceEur: round2(price),
-      shippingEstimateEur: undefined,
-      leadTimeDays: 12,
-      reliabilityScore: 70,
-      region: 'AliExpress',
-      kind: 'live',
-      soldCount: sold ?? undefined,
-      popularity: sold ?? undefined,
-      note: 'Precio AliExpress (spike RapidAPI). Match por keyword — verificá que sea el mismo producto.',
-    });
-    if (offers.length >= limit) break;
-  }
-  return offers;
-}
-
-function extractList(payload: unknown): AeProduct[] {
+function extractList(payload: unknown): AeItem[] {
   if (!payload || typeof payload !== 'object') return [];
   const root = payload as Record<string, unknown>;
-
-  const asArray = (v: unknown): AeProduct[] | null => {
-    if (Array.isArray(v)) return v as AeProduct[];
-    if (v && typeof v === 'object') {
-      const o = v as Record<string, unknown>;
-      // RapidAPI AliExpress True API: { products: { product: [...] } }
-      if (Array.isArray(o.product)) return o.product as AeProduct[];
-      if (Array.isArray(o.products)) return o.products as AeProduct[];
-      if (Array.isArray(o.items)) return o.items as AeProduct[];
-    }
-    return null;
-  };
-
-  for (const c of [
-    root.products,
-    root.data,
-    root.result,
-    root.items,
-    (root.data as Record<string, unknown> | undefined)?.products,
-    (root.result as Record<string, unknown> | undefined)?.products,
-  ]) {
-    const list = asArray(c);
-    if (list?.length) return list;
-  }
-  return [];
+  const data = root.data as Record<string, unknown> | undefined;
+  const list = data?.itemList;
+  return Array.isArray(list) ? (list as AeItem[]) : [];
 }
 
 /**
- * Spike: AliExpress product search via RapidAPI proxy (no official Alibaba partner needed).
+ * AliExpress Business API (RapidAPI, host `aliexpress-business-api.p.rapidapi.com`).
+ * Replaces the old AliExpress True API + Alibaba.com/Otapi split: this single
+ * provider covers keyword search, live pricing/volume, AND image search
+ * (`imageurl_search.php`) — Alibaba.com is no longer used anywhere.
+ *
  * Env: ALIEXPRESS_RAPIDAPI_KEY
- * Optional: ALIEXPRESS_RAPIDAPI_HOST (default aliexpress-true-api.p.rapidapi.com)
+ * Optional: ALIEXPRESS_RAPIDAPI_HOST (default aliexpress-business-api.p.rapidapi.com)
  */
 @Injectable()
 export class AliExpressSupplierProvider {
   private readonly logger = new Logger(AliExpressSupplierProvider.name);
-  readonly name = 'aliexpress_rapidapi';
+  readonly name = 'aliexpress_business_api';
 
   constructor(private readonly config: ConfigService) {}
 
   enabled() {
     return Boolean(this.config.get<string>('ALIEXPRESS_RAPIDAPI_KEY')?.trim());
+  }
+
+  private host() {
+    return (
+      this.config.get<string>('ALIEXPRESS_RAPIDAPI_HOST')?.trim() ||
+      'aliexpress-business-api.p.rapidapi.com'
+    );
+  }
+
+  private headers() {
+    const host = this.host();
+    return {
+      Accept: 'application/json',
+      'X-RapidAPI-Key': this.config.get<string>('ALIEXPRESS_RAPIDAPI_KEY')!.trim(),
+      'X-RapidAPI-Host': host,
+    };
   }
 
   async findRelated(
@@ -163,84 +156,87 @@ export class AliExpressSupplierProvider {
       return [];
     }
 
-    const key = this.config.get<string>('ALIEXPRESS_RAPIDAPI_KEY')!.trim();
-    const host =
-      this.config.get<string>('ALIEXPRESS_RAPIDAPI_HOST')?.trim() ||
-      'aliexpress-true-api.p.rapidapi.com';
     const keywords = supplierSearchKeywords(productTitle);
     if (!keywords) return [];
 
     const params = new URLSearchParams({
-      keywords,
-      page_no: '1',
-      page_size: String(Math.min(Math.max(limit * 2, 8), 20)),
-      sort: 'LAST_VOLUME_DESC',
-      target_currency: 'EUR',
-      target_language: 'EN',
-      ship_to_country: shipToForMarket(market),
+      keyWord: keywords,
+      pageSize: String(Math.min(Math.max(limit * 2, 8), 20)),
+      pageIndex: '1',
+      country: shipToForMarket(market),
+      currency: 'EUR',
+      lang: 'en',
+      filter: 'orders',
+      sortBy: 'desc',
     });
 
-    if (salePriceEur != null && salePriceEur > 0) {
-      // Keep AE cost below Amazon PVP — otherwise it's not a sourcing candidate.
-      params.set('min_sale_price', String(round2(Math.max(0.5, salePriceEur * 0.04))));
-      params.set('max_sale_price', String(round2(salePriceEur * 0.55)));
-    }
-
-    const url = `https://${host}/api/v3/products?${params.toString()}`;
+    const host = this.host();
+    const url = `https://${host}/textsearch.php?${params.toString()}`;
 
     try {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/json',
-          'X-RapidAPI-Key': key,
-          'X-RapidAPI-Host': host,
-        },
-      });
+      const res = await fetch(url, { method: 'GET', headers: this.headers() });
       if (!res.ok) {
         this.logger.warn(`AliExpress HTTP ${res.status}: ${res.statusText}`);
-        params.set('sort', 'SALE_PRICE_ASC');
-        const retryUrl = `https://${host}/api/v3/products?${params.toString()}`;
-        const retry = await fetch(retryUrl, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'X-RapidAPI-Key': key,
-            'X-RapidAPI-Host': host,
-          },
-        });
-        if (!retry.ok) return [];
-        const list = extractList(await retry.json());
-        const offers = mapAeOffers(list, limit, salePriceEur);
-        this.logger.log(
-          `AliExpress "${keywords}" → ${offers.length} live offers (from ${list.length} raw, price sort fallback)`,
-        );
-        return offers;
+        return [];
       }
-      const json = (await res.json()) as unknown;
-      let list = extractList(json);
-      if (!list.length) {
-        params.set('sort', 'SALE_PRICE_ASC');
-        const retryUrl = `https://${host}/api/v3/products?${params.toString()}`;
-        const retry = await fetch(retryUrl, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/json',
-            'X-RapidAPI-Key': key,
-            'X-RapidAPI-Host': host,
-          },
-        });
-        if (retry.ok) {
-          list = extractList(await retry.json());
-        }
-      }
-      const offers = mapAeOffers(list, limit, salePriceEur);
+      const list = extractList(await res.json());
+      const offers = list
+        .map((raw) => mapTextSearchItem(raw, salePriceEur))
+        .filter((o): o is SupplierOffer => o != null)
+        .slice(0, limit);
       this.logger.log(
         `AliExpress "${keywords}" → ${offers.length} live offers (from ${list.length} raw)`,
       );
       return offers;
     } catch (err) {
       this.logger.warn(`AliExpress search failed: ${err}`);
+      return [];
+    }
+  }
+
+  /**
+   * Identify candidate products from a photo/image alone (no title yet) —
+   * replaces Alibaba.com/Otapi's image search. `imageUrl` must be a publicly
+   * reachable URL (Amazon product image, or our own uploaded photo).
+   */
+  async searchByImageOnly(
+    imageUrl: string,
+    limit = 5,
+    market = 'ES',
+  ): Promise<SupplierOffer[]> {
+    if (!this.enabled()) return [];
+    if (!imageUrl?.trim()) return [];
+
+    const params = new URLSearchParams({
+      imgUrl: imageUrl.trim(),
+      search_type: 'similar',
+      country: shipToForMarket(market),
+      currency: 'EUR',
+      lang: 'en',
+      filter: 'orders',
+      sortBy: 'desc',
+    });
+
+    const host = this.host();
+    const url = `https://${host}/imageurl_search.php?${params.toString()}`;
+
+    try {
+      const res = await fetch(url, { method: 'GET', headers: this.headers() });
+      if (!res.ok) {
+        this.logger.warn(`AliExpress image search HTTP ${res.status}: ${res.statusText}`);
+        return [];
+      }
+      const list = extractList(await res.json());
+      const offers = list
+        .map((raw) => mapImageSearchItem(raw))
+        .filter((o): o is SupplierOffer => o != null)
+        .slice(0, limit);
+      this.logger.log(
+        `AliExpress image search → ${offers.length} live offers (from ${list.length} raw)`,
+      );
+      return offers;
+    } catch (err) {
+      this.logger.warn(`AliExpress image search failed: ${err}`);
       return [];
     }
   }

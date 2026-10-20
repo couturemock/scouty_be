@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { planById } from '../common/plans';
+import { shipToCountry } from '../common/ship-to';
 import {
   sortAdsByEngagement,
   summarizeWinningFormats,
@@ -251,11 +252,7 @@ export class CreativeIntelligenceService {
       product = await this.products.findOne({ where: { id: productId } });
     }
 
-    const market =
-      country?.trim().toUpperCase() ||
-      product?.country ||
-      user.targetMarket ||
-      'ES';
+    const market = country?.trim().toUpperCase() || product?.country || shipToCountry();
 
     const cached = product ? this.getStored(product) : null;
     if (cached) {

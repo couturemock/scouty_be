@@ -106,7 +106,6 @@ export class DevUsersSeedService implements OnModuleInit {
         subscriptionStatus: opts.subscriptionStatus,
         currentPeriodEnd: periodEnd,
         cancelAtPeriodEnd: false,
-        targetMarket: 'ES',
       });
     } else {
       user.passwordHash = passwordHash;

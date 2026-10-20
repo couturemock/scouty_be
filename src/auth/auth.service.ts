@@ -39,7 +39,6 @@ export class AuthService {
       subscriptionStatus: user.subscriptionStatus,
       currentPeriodEnd: user.currentPeriodEnd,
       cancelAtPeriodEnd: user.cancelAtPeriodEnd,
-      targetMarket: user.targetMarket ?? 'ES',
       isAdmin: user.isAdmin,
       waitlistDiscountEligible: user.waitlistDiscountEligible,
     };
@@ -83,7 +82,6 @@ export class AuthService {
       name: dto.name,
       passwordHash: await bcrypt.hash(dto.password, 10),
       plan: (dto.plan ?? 'basic') as PlanId,
-      targetMarket: dto.targetMarket ?? 'ES',
       emailVerifyToken: verifyToken,
       emailVerified: false,
       subscriptionStatus: 'none',

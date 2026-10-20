@@ -1,13 +1,43 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { SupplierOffer } from '../types';
-import { AlibabaComSupplierProvider } from './alibaba-com.provider';
-import { AlibabaSupplierProvider } from './alibaba.provider';
 import { AliExpressSupplierProvider } from './aliexpress.provider';
+import { CjSupplierProvider } from './cj.provider';
 import { offerMatchesSeed } from './offer-relevance';
+import { supplierSearchKeywords } from './search-keywords';
+
+function searchLinkFallback(productTitle: string, limit: number): SupplierOffer[] {
+  const seed = supplierSearchKeywords(productTitle) || productTitle.slice(0, 40);
+  const q = encodeURIComponent(seed);
+  const offers: SupplierOffer[] = [
+    {
+      source: 'aliexpress',
+      name: `${seed} — Buscar en AliExpress`,
+      listingUrl: `https://www.aliexpress.com/wholesale?SearchText=${q}`,
+      kind: 'estimated',
+      region: 'AliExpress',
+      note: 'Sin precio live: abrí la búsqueda y compará listings.',
+    },
+    {
+      source: 'cj',
+      name: `${seed} — Buscar en CJdropshipping`,
+      listingUrl: `https://cjdropshipping.com/search?keyword=${q}`,
+      kind: 'estimated',
+      region: 'CJdropshipping',
+      note: 'Sin precio live: abrí la búsqueda en CJ.',
+    },
+  ];
+  return offers.slice(0, Math.max(0, limit));
+}
+
+/** Landed cost (unit + shipping when known) — the number margin is computed from. */
+export function landedCostEur(o: SupplierOffer): number {
+  return (o.unitPriceEur ?? Infinity) + (o.shippingEstimateEur ?? 0);
+}
 
 /**
- * Live: AliExpress True API + Otapi Alibaba.com.
- * Failures / quota → search-link fallbacks. Never throws.
+ * Live: AliExpress Business API (RapidAPI) + CJdropshipping API 2.0, queried
+ * in parallel. Failures / quota → plain search-link fallbacks (no API, no
+ * cost). Never throws.
  */
 @Injectable()
 export class SuppliersService {
@@ -15,8 +45,7 @@ export class SuppliersService {
 
   constructor(
     private readonly aliexpress: AliExpressSupplierProvider,
-    private readonly alibabaCom: AlibabaComSupplierProvider,
-    private readonly links: AlibabaSupplierProvider,
+    private readonly cj: CjSupplierProvider,
   ) {}
 
   status() {
@@ -25,25 +54,29 @@ export class SuppliersService {
         enabled: this.aliexpress.enabled(),
         provider: this.aliexpress.name,
       },
-      alibabaCom: {
-        enabled: this.alibabaCom.enabled(),
-        provider: this.alibabaCom.name,
-        host: 'otapi-alibaba',
+      cj: {
+        enabled: this.cj.enabled(),
+        provider: this.cj.name,
       },
     };
   }
 
   beginIngestRun() {
-    this.alibabaCom.resetRunBudget();
+    // No per-run budget to reset anymore — kept as a no-op so callers
+    // (products.service.ts, ad-winners.service.ts) don't need changes.
   }
 
   /**
-   * Identify candidate products from a photo alone (no title yet) — only
-   * Alibaba.com/Otapi supports image search; AliExpress is keyword-only.
+   * Identify candidate products from a photo alone (no title yet) — AliExpress
+   * Business API image search (`imageurl_search.php`).
    */
-  async identifyByImage(imageUrl: string, limit = 5): Promise<SupplierOffer[]> {
-    return this.alibabaCom.searchByImageOnly(imageUrl, limit).catch((err) => {
-      this.logger.warn(`Alibaba.com image identify: ${err}`);
+  async identifyByImage(
+    imageUrl: string,
+    limit = 5,
+    market = 'ES',
+  ): Promise<SupplierOffer[]> {
+    return this.aliexpress.searchByImageOnly(imageUrl, limit, market).catch((err) => {
+      this.logger.warn(`AliExpress image identify: ${err}`);
       return [] as SupplierOffer[];
     });
   }
@@ -56,97 +89,66 @@ export class SuppliersService {
     imageUrl?: string | null,
   ): Promise<SupplierOffer[]> {
     const take = Math.min(Math.max(limit, 1), 9);
-    const perSource = Math.min(4, Math.max(2, Math.ceil(take / 2)));
+    const perSource = Math.max(3, Math.ceil(take / 2) + 1);
 
-    const [aeRaw, albRaw] = await Promise.all([
+    const [byKeyword, byCj] = await Promise.all([
       this.aliexpress
         .findRelated(productTitle, perSource, salePriceEur, market)
         .catch((err) => {
-          this.logger.warn(`AliExpress spike: ${err}`);
+          this.logger.warn(`AliExpress keyword search: ${err}`);
           return [] as SupplierOffer[];
         }),
-      this.alibabaCom
-        .findRelated(productTitle, perSource, salePriceEur, imageUrl)
-        .catch((err) => {
-          this.logger.warn(`Alibaba.com spike: ${err}`);
-          return [] as SupplierOffer[];
-        }),
+      this.cj.findRelated(productTitle, perSource, salePriceEur, market).catch((err) => {
+        this.logger.warn(`CJ keyword search: ${err}`);
+        return [] as SupplierOffer[];
+      }),
     ]);
 
-    // A keyword/image search can return a live-priced item that shares no
-    // real identity with the product (Alibaba's image-only mode in
-    // particular matches generic packaging shapes, not the product itself).
-    // Drop those before they ever reach the UI as a trustworthy live offer.
-    const ae = aeRaw.filter(
-      (o) => o.kind !== 'live' || offerMatchesSeed(o.name, productTitle),
-    );
-    const alb = albRaw.filter(
-      (o) => o.kind !== 'live' || offerMatchesSeed(o.name, productTitle),
-    );
-    const droppedIrrelevant =
-      aeRaw.length - ae.length + (albRaw.length - alb.length);
+    const relevant = (o: SupplierOffer) =>
+      o.kind !== 'live' || offerMatchesSeed(o.name, productTitle);
+    let merged = [...byKeyword, ...byCj].filter(relevant);
 
-    const merged = this.mergeDiverse([ae, alb], take);
-
-    this.logger.log(
-      `Suppliers "${productTitle.slice(0, 40)}" → AE ${ae.length} · Alibaba ${alb.length} · merged ${merged.length}` +
-        (droppedIrrelevant
-          ? ` (${droppedIrrelevant} descartados por baja relevancia)`
-          : ''),
-    );
-
-    if (merged.length >= take) return merged;
-
-    try {
-      const fallback = await this.links.findRelated(
-        productTitle,
-        take - merged.length,
-        salePriceEur,
-      );
-      const seen = new Set(merged.map((o) => o.listingUrl));
-      for (const s of fallback) {
-        if (seen.has(s.listingUrl)) continue;
-        merged.push({
-          ...s,
-          unitPriceEur: undefined,
-          shippingEstimateEur: undefined,
-          kind: 'estimated' as const,
-          note: s.note ?? 'Sin precio live: enlace de búsqueda.',
+    if (merged.length < take && imageUrl) {
+      const byImage = await this.aliexpress
+        .searchByImageOnly(imageUrl, take - merged.length, market)
+        .catch((err) => {
+          this.logger.warn(`AliExpress image search: ${err}`);
+          return [] as SupplierOffer[];
         });
-        if (merged.length >= take) break;
+      const seen = new Set(merged.map((o) => o.listingUrl));
+      for (const o of byImage.filter(relevant)) {
+        if (seen.has(o.listingUrl)) continue;
+        seen.add(o.listingUrl);
+        merged.push(o);
       }
-    } catch (err) {
-      this.logger.warn(`Supplier link fallback: ${err}`);
+    }
+
+    merged = merged.sort((a, b) => landedCostEur(a) - landedCostEur(b));
+    this.logger.log(
+      `Suppliers "${productTitle.slice(0, 40)}" → AE ${merged.filter((o) => o.source === 'aliexpress').length} · CJ ${merged.filter((o) => o.source === 'cj').length}`,
+    );
+
+    if (merged.length >= take) return merged.slice(0, take);
+
+    const fallback = searchLinkFallback(productTitle, take - merged.length);
+    const seen = new Set(merged.map((o) => o.listingUrl));
+    for (const s of fallback) {
+      if (seen.has(s.listingUrl)) continue;
+      merged.push(s);
     }
 
     return merged.slice(0, take);
   }
 
-  /** Round-robin by source so the UI shows AE + Alibaba when available. */
-  private mergeDiverse(buckets: SupplierOffer[][], take: number): SupplierOffer[] {
-    const queues = buckets.map((b) =>
-      [...b].sort(
-        (a, c) => (a.unitPriceEur ?? Infinity) - (c.unitPriceEur ?? Infinity),
-      ),
+  /** Adds real CJ freight to the cheapest CJ offer (2 extra CJ requests). */
+  async withShipping(offers: SupplierOffer[], market: string): Promise<SupplierOffer[]> {
+    const idx = offers.findIndex(
+      (o) => o.source === 'cj' && o.kind === 'live' && o.shippingEstimateEur == null,
     );
-    const out: SupplierOffer[] = [];
-    const seen = new Set<string>();
-
-    let progressed = true;
-    while (out.length < take && progressed) {
-      progressed = false;
-      for (const q of queues) {
-        while (q.length) {
-          const next = q.shift()!;
-          if (seen.has(next.listingUrl)) continue;
-          seen.add(next.listingUrl);
-          out.push(next);
-          progressed = true;
-          break;
-        }
-        if (out.length >= take) break;
-      }
-    }
-    return out;
+    if (idx < 0) return offers;
+    const enriched = await this.cj.withFreight(offers[idx]!, market).catch(() => offers[idx]!);
+    const next = [...offers];
+    next[idx] = enriched;
+    return next.sort((a, b) => landedCostEur(a) - landedCostEur(b));
   }
 }

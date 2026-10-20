@@ -10,6 +10,11 @@ import {
   isAppPromotionAd,
 } from '../ads/ad-content-filters';
 import { resolveCreativeSourceUrl } from '../ads/creative-source-url';
+import {
+  AdProductDetail,
+  DiscoveredAd,
+  DiscoveryPass,
+} from '../../discovery/discovery.types';
 import { CreativeAd } from '../types';
 import { PipiAdsClient } from './pipiads.client';
 
@@ -58,7 +63,7 @@ export class PipiAdsProvider {
     };
   }
 
-  private regionForCountry(country?: string) {
+  regionForCountry(country?: string) {
     const map: Record<string, string[]> = {
       ES: ['ES', 'US', 'GB'],
       US: ['US', 'GB', 'CA'],
@@ -190,7 +195,7 @@ export class PipiAdsProvider {
       ) || undefined,
       sourceUrl: resolved.url,
       publicSignals: {
-        label: 'Señales públicas PipiAds (sin CTR/CPA/ROAS reales)',
+        label: 'Señales públicas PipiAds (sin clicks/CTR/CPA/ROAS reales en USD)',
         linkKind: resolved.kind,
         videoId: raw.video_id ?? raw.id,
         adArchiveId:
@@ -202,9 +207,24 @@ export class PipiAdsProvider {
         mediaUrl: raw.video_url || undefined,
         playCount: raw.play_count ?? raw.ad_play_count,
         likeCount: raw.digg_count ?? raw.like_count,
+        // Not in the live payload today (confirmed empty across TikTok and
+        // Meta responses, 2026-10-06) but kept as a forward-compatible
+        // fallback in case a future PipiAds response variant includes them.
+        commentCount: raw.comment_count,
+        shareCount: raw.share_count,
         deliveryDays: raw.put_day ?? raw.put_days ?? raw.delivery_days,
+        // `ad_cost`/`cost` never appear in the live payload (verified
+        // 2026-10-06) — kept as a fallback only. `min_cpa`/`min_cpm` ARE
+        // real fields PipiAds returns, but their scale is inconsistent with
+        // real USD (e.g. a viral TikTok ad reporting min_cpm≈76,000, which
+        // at its play count implies billions of dollars of spend) and
+        // undocumented, so they're stored for reference/debugging only —
+        // never treated as real spend and never fed into scoring.
         adSpendUsd: raw.ad_cost ?? raw.cost,
-        advertiserName: raw.advertiser_name ?? raw.brand_name,
+        estimatedCpaUnverified: raw.min_cpa,
+        estimatedCpmUnverified: raw.min_cpm,
+        hotValueUnverified: raw.hot_value,
+        advertiserName: raw.app_name ?? raw.unique_id ?? raw.advertiser_name ?? raw.brand_name,
         region: raw.region ?? raw.fetch_region,
       },
       aiAnalysis: this.analyzeAd(raw, fallbackTitle),
@@ -431,5 +451,158 @@ export class PipiAdsProvider {
 
     const ads = sortAdsByEngagement(realProducts).slice(0, limit);
     return { ads, creditsUsed: creditsUsed || ads.length };
+  }
+
+  /**
+   * Generic, filtered `/adspy/list` page for the weekly discovery snapshot.
+   * Unlike `discoverTopAds`, callers pass e-commerce filters (shop_type,
+   * data_type, put_day, first_time...) so the result is store product ads,
+   * not platform-wide viral content.
+   */
+  async searchDiscovery(
+    params: Record<string, unknown>,
+    opts: { country: string; pass: DiscoveryPass; seed?: string },
+  ): Promise<{ ads: DiscoveredAd[]; creditsUsed: number; hasNext: boolean }> {
+    const { data, consumed } = await this.client.callWithMeta<unknown>(
+      '/v3/api/open/adspy/list',
+      { sort_type: 'desc', ...params },
+    );
+    const list = this.extractList(data);
+    const page =
+      data && typeof data === 'object'
+        ? ((data as Record<string, unknown>).page as
+            | Record<string, unknown>
+            | undefined)
+        : undefined;
+    const queriedPlatform: CreativeAd['platform'] | null =
+      params.plat_type === 1 ? 'tiktok' : params.plat_type === 2 ? 'facebook' : null;
+    const ads = list
+      .map((raw) => this.toDiscoveredAd(raw, opts))
+      .filter((a): a is DiscoveredAd => a != null)
+      .map((a) => {
+        if (!queriedPlatform) return a;
+        a.platform = queriedPlatform;
+        a.creative.platform = queriedPlatform;
+        return a;
+      });
+    return {
+      ads,
+      creditsUsed: consumed ?? list.length,
+      hasNext: Boolean(page?.is_next),
+    };
+  }
+
+  private toDiscoveredAd(
+    raw: RawAd,
+    opts: { country: string; pass: DiscoveryPass; seed?: string },
+  ): DiscoveredAd | null {
+    const videoId = String(raw.video_id ?? raw.id ?? '').trim();
+    if (!videoId) return null;
+    const copy = String(raw.desc ?? raw.app_title ?? raw.title ?? '').trim();
+    const creative = this.mapAd(raw, opts.seed ?? (copy || 'Producto'), opts.country);
+    const n = (v: unknown) => {
+      const x = Number(v);
+      return Number.isFinite(x) ? x : 0;
+    };
+    const ts = (v: unknown) => {
+      const x = Number(v);
+      return Number.isFinite(x) && x > 0 ? x : null;
+    };
+    const dataTypes = Array.isArray(raw.data_type)
+      ? (raw.data_type as unknown[]).map(Number).filter(Number.isFinite)
+      : [];
+    const tags = Array.isArray(raw.ai_analysis_tags)
+      ? (raw.ai_analysis_tags as unknown[]).map((t) => String(t)).filter(Boolean)
+      : [];
+    creative.publicSignals = {
+      ...creative.publicSignals,
+      storeId: raw.store_id ?? null,
+      firstSeenAt: ts(raw.found_time) ?? ts(raw.ad_create_time),
+      lastSeenAt: ts(raw.last_put_time),
+      dataTypes,
+      buttonText: raw.button_text ?? null,
+    };
+    return {
+      videoId,
+      platform: creative.platform,
+      copy,
+      advertiser:
+        String(raw.unique_id ?? raw.app_name ?? '').trim() || null,
+      advertiserId: String(raw.root_path_id ?? '').trim() || null,
+      storeId: String(raw.store_id ?? '').trim() || null,
+      shopType: String(raw.shop_type ?? '').trim() || null,
+      dataTypes,
+      buttonText: String(raw.button_text ?? '').trim() || null,
+      putDays: n(raw.put_days ?? raw.put_day),
+      plays: n(raw.play_count),
+      likes: n(raw.digg_count),
+      comments: n(raw.comment_count),
+      shares: n(raw.share_count),
+      firstSeenAt: ts(raw.found_time) ?? ts(raw.ad_create_time),
+      lastSeenAt: ts(raw.last_put_time),
+      aiTags: tags,
+      pass: opts.pass,
+      seed: opts.seed,
+      creative,
+    };
+  }
+
+  /**
+   * `/adspy/detail` — 1 credit. The only place PipiAds exposes the advertised
+   * product (title, price, currency) and the store landing URL; the list
+   * payload only carries `store_id` (verified live 2026-10-12).
+   */
+  async adProductDetail(
+    videoId: string,
+  ): Promise<{ detail: AdProductDetail | null; creditsUsed: number }> {
+    const { data, consumed } = await this.client.callWithMeta<unknown>(
+      '/v3/api/open/adspy/detail',
+      { id: videoId },
+    );
+    return { detail: parseAdProductDetail(data), creditsUsed: consumed ?? 1 };
+  }
+}
+
+function str(v: unknown): string | null {
+  const s = v == null ? '' : String(v).trim();
+  return s && s !== 'null' ? s : null;
+}
+
+export function parseAdProductDetail(data: unknown): AdProductDetail | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  const store = (d.ad_store ?? d.ad_advertiser ?? {}) as Record<string, unknown>;
+  const landing = [d.app_url, d.landing_page, d.ad_url]
+    .map(str)
+    .find((u) => u != null && /^https?:\/\//i.test(u) && !/tiktok\.com|facebook\.com|instagram\.com/i.test(u));
+  const price = Number(d.product_price);
+  const domain =
+    str(store.link)
+      ?.replace(/^https?:\/\//i, '')
+      .replace(/^www\./i, '')
+      .replace(/\/.*$/, '')
+      .toLowerCase() ??
+    (landing ? safeHost(landing) : null);
+  const detail: AdProductDetail = {
+    productId: str(d.product_id),
+    productTitle: str(d.product_title),
+    productPrice: Number.isFinite(price) && price > 0 ? price : null,
+    productCurrency: str(d.product_currency),
+    productImage: str(d.product_image),
+    storeName: str(store.name),
+    storeDomain: domain,
+    landingUrl: landing ?? null,
+  };
+  if (!detail.productTitle && !detail.landingUrl && !detail.storeDomain) {
+    return null;
+  }
+  return detail;
+}
+
+function safeHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return null;
   }
 }

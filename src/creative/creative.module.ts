@@ -6,7 +6,6 @@ import { Product } from '../products/product.entity';
 import { ProductsModule } from '../products/products.module';
 import { RankingEntry } from '../rankings/ranking-entry.entity';
 import { UsageModule } from '../usage/usage.module';
-import { AdWinnersService } from './ad-winners.service';
 import { CreativeController } from './creative.controller';
 import { CreativeIntelligenceService } from './creative-intelligence.service';
 import { CreativeService } from './creative.service';
@@ -20,7 +19,7 @@ import { CreativeService } from './creative.service';
     forwardRef(() => ProductsModule),
   ],
   controllers: [CreativeController],
-  providers: [CreativeService, CreativeIntelligenceService, AdWinnersService],
-  exports: [CreativeIntelligenceService, CreativeService, AdWinnersService],
+  providers: [CreativeService, CreativeIntelligenceService],
+  exports: [CreativeIntelligenceService, CreativeService],
 })
 export class CreativeModule {}

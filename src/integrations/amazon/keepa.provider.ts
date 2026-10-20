@@ -89,8 +89,13 @@ export class KeepaAmazonProvider implements AmazonProvider {
     return this.config.get<string>('KEEPA_API_KEY')?.trim();
   }
 
+  /** Keepa is out of the product flow: off unless KEEPA_ENABLED=1, even with a key. */
   enabled() {
-    return Boolean(this.apiKey) && this.config.get('AMAZON_PROVIDER') === 'keepa';
+    return (
+      this.config.get('KEEPA_ENABLED') === '1' &&
+      Boolean(this.apiKey) &&
+      this.config.get('AMAZON_PROVIDER') === 'keepa'
+    );
   }
 
   private marketFromCode(code?: string): AmazonMarket {

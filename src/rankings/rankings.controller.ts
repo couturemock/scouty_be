@@ -18,13 +18,10 @@ export class RankingsController {
   ) {}
 
   @Get('meta')
-  async meta(
-    @CurrentUser() user: User,
-    @Query('market') market?: string,
-  ) {
+  async meta(@CurrentUser() user: User) {
     const access = await this.usage.peekRankingsView(user);
     return {
-      ...(await this.rankings.listAvailable(user, market)),
+      ...(await this.rankings.listAvailable(user)),
       rankingsAccess: {
         unlimited: planById(user.plan).rankingsViewsLifetime === null,
         used: access.used,
@@ -39,7 +36,6 @@ export class RankingsController {
     @CurrentUser() user: User,
     @Query('scope') scope: RankingScopeParam = 'general',
     @Query('scopeKey') scopeKey = '*',
-    @Query('market') market?: string,
     /** First open of Rankings in Basic — marks the one-time preview as used */
     @Query('consume') consume?: string,
   ) {
@@ -68,11 +64,7 @@ export class RankingsController {
       };
     }
 
-    const effectiveUser = {
-      ...user,
-      targetMarket: market || user.targetMarket || 'ES',
-    } as User;
-    const board = await this.rankings.getBoard(effectiveUser, scope, scopeKey);
+    const board = await this.rankings.getBoard(scope, scopeKey);
     return {
       locked: false,
       unlockRequired: false,

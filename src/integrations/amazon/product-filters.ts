@@ -70,7 +70,8 @@ export type FilterReason =
   | 'heavy_fragile'
   | 'no_title';
 
-export function amazonIngestRejectReason(input: {
+/** Source-agnostic "useful for dropshipping" gate (Amazon ingest and ad discovery). */
+export function productRejectReason(input: {
   title?: string;
   brand?: string | null;
   category?: string;
@@ -95,10 +96,12 @@ export function amazonIngestRejectReason(input: {
   return null;
 }
 
+export const amazonIngestRejectReason = productRejectReason;
+
 export function passesAmazonIngestFilters(input: {
   title?: string;
   brand?: string | null;
   category?: string;
 }): boolean {
-  return amazonIngestRejectReason(input) == null;
+  return productRejectReason(input) == null;
 }

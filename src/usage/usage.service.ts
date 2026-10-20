@@ -16,6 +16,7 @@ export class UsageService {
   async getCounts(userId: string, periodKey = currentPeriodKey()) {
     const rows = await this.usageRepo.find({ where: { userId, periodKey } });
     const analysis = rows.find((r) => r.kind === 'analysis')?.count ?? 0;
+    const search = rows.find((r) => r.kind === 'search')?.count ?? 0;
     const creative =
       rows.find((r) => r.kind === 'creative_intelligence')?.count ?? 0;
     const rankingsLifetime =
@@ -27,6 +28,7 @@ export class UsageService {
     return {
       periodKey,
       analysis,
+      search,
       creativeIntelligence: creative,
       rankingsViews: rankingsLifetime,
     };
@@ -56,9 +58,11 @@ export class UsageService {
     const limit =
       kind === 'analysis'
         ? plan.analysesPerMonth
-        : kind === 'creative_intelligence'
-          ? plan.creativeIntelligencePerMonth
-          : plan.rankingsViewsLifetime;
+        : kind === 'search'
+          ? plan.searchesPerMonth
+          : kind === 'creative_intelligence'
+            ? plan.creativeIntelligencePerMonth
+            : plan.rankingsViewsLifetime;
 
     // Plan does not include this feature (e.g. CI on Basic = 0).
     if (limit === 0) {
@@ -77,9 +81,12 @@ export class UsageService {
     if (limit !== null && counter.count >= limit) {
       if (kind === 'analysis') {
         throw new ForbiddenException(
-          limit === 1
-            ? 'Ya usaste tu análisis del plan Básico. Mejora a Pro para analizar sin límite.'
-            : `Has alcanzado el límite de ${limit} análisis este mes. Mejora a Pro para análisis ilimitados.`,
+          `Has alcanzado el límite de ${limit} análisis por URL o imagen este mes. Mejora a Pro para análisis ilimitados.`,
+        );
+      }
+      if (kind === 'search') {
+        throw new ForbiddenException(
+          `Has alcanzado el límite de ${limit} búsquedas este mes. Mejora a Pro para búsquedas ilimitadas.`,
         );
       }
       if (kind === 'rankings_view') {
@@ -88,7 +95,7 @@ export class UsageService {
         );
       }
       throw new ForbiddenException(
-        `Has alcanzado el límite de Creative Intelligence este mes.`,
+        `Has alcanzado el límite de ${limit} análisis de anuncios este mes. Mejora a Pro para análisis ilimitados.`,
       );
     }
 
@@ -158,6 +165,7 @@ export class UsageService {
     user: User,
     counts: {
       analysis: number;
+      search?: number;
       creativeIntelligence: number;
       rankingsViews?: number;
     },
@@ -169,6 +177,10 @@ export class UsageService {
       analysis: {
         used: counts.analysis,
         limit: plan.analysesPerMonth,
+      },
+      search: {
+        used: counts.search ?? 0,
+        limit: plan.searchesPerMonth,
       },
       creativeIntelligence: {
         used: counts.creativeIntelligence,

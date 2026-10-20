@@ -28,7 +28,7 @@ describe('computeImpulseSignal', () => {
         meta: {
           suppliers: [
             { source: 'aliexpress', name: 'a', listingUrl: 'https://ae/1', unitPriceEur: 4, kind: 'live' },
-            { source: 'alibaba', name: 'b', listingUrl: 'https://al/2', unitPriceEur: 5, kind: 'live' },
+            { source: 'aliexpress', name: 'b', listingUrl: 'https://ae/2', unitPriceEur: 5, kind: 'live' },
           ],
         },
       }),
