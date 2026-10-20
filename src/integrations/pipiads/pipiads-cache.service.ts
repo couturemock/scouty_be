@@ -4,6 +4,14 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { buildRedisConnection } from '../../queue/redis-connection';
 
+type ResolvedEntry<T> = {
+  data: T;
+  consumed: number | null;
+  remaining: number | null;
+  /** false = served from the Redis cache, no real PipiAds call made. */
+  realCall: boolean;
+};
+
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
@@ -48,38 +56,55 @@ export class PipiAdsCacheService {
    * something for the caller that actually paid for the request, so a cache
    * hit or a deduped follower always gets `consumed: 0` back — only the one
    * real HTTP call reports what it truly cost.
+   *
+   * The leader/follower split (`this.inFlight.get`/`.set`) happens with no
+   * `await` in between, so two calls for the same key made back-to-back
+   * (no `await` between them, as `TrendDiscoveryService`'s `mapLimit` does)
+   * can never both become leaders — JS runs each call's synchronous prefix
+   * to completion before the next call starts.
    */
   async getOrFetch<T>(
     cacheKey: string,
     ttlSec: number,
     fetchFn: () => Promise<{ data: T; consumed: number | null; remaining: number | null }>,
   ): Promise<{ data: T; consumed: number | null; remaining: number | null; fromCache: boolean }> {
-    const cached = await this.readCache<T>(cacheKey);
-    if (cached !== undefined) {
-      this.hits += 1;
-      return { data: cached, consumed: 0, remaining: null, fromCache: true };
+    let isLeader = false;
+    let pending = this.inFlight.get(cacheKey) as Promise<ResolvedEntry<T>> | undefined;
+    if (!pending) {
+      isLeader = true;
+      pending = this.resolveEntry(cacheKey, ttlSec, fetchFn);
+      this.inFlight.set(cacheKey, pending);
+      pending.finally(() => this.inFlight.delete(cacheKey));
     }
-
-    const existing = this.inFlight.get(cacheKey) as
-      | Promise<{ data: T; consumed: number | null; remaining: number | null }>
-      | undefined;
-    if (existing) {
-      this.hits += 1;
-      const result = await existing;
-      return { data: result.data, consumed: 0, remaining: result.remaining, fromCache: true };
-    }
-
-    this.misses += 1;
-    const pending = fetchFn()
-      .then(async (result) => {
-        await this.writeCache(cacheKey, result.data, ttlSec);
-        return result;
-      })
-      .finally(() => this.inFlight.delete(cacheKey));
-    this.inFlight.set(cacheKey, pending);
 
     const result = await pending;
-    return { ...result, fromCache: false };
+    if (isLeader && result.realCall) {
+      this.misses += 1;
+      return { data: result.data, consumed: result.consumed, remaining: result.remaining, fromCache: false };
+    }
+    // Either a genuine cache hit (leader found it in Redis) or a deduped
+    // follower of a concurrent call — neither paid PipiAds for this.
+    this.hits += 1;
+    return {
+      data: result.data,
+      consumed: 0,
+      remaining: result.realCall ? result.remaining : null,
+      fromCache: true,
+    };
+  }
+
+  private async resolveEntry<T>(
+    cacheKey: string,
+    ttlSec: number,
+    fetchFn: () => Promise<{ data: T; consumed: number | null; remaining: number | null }>,
+  ): Promise<ResolvedEntry<T>> {
+    const cached = await this.readCache<T>(cacheKey);
+    if (cached !== undefined) {
+      return { data: cached, consumed: null, remaining: null, realCall: false };
+    }
+    const result = await fetchFn();
+    await this.writeCache(cacheKey, result.data, ttlSec);
+    return { ...result, realCall: true };
   }
 
   private async readCache<T>(key: string): Promise<T | undefined> {

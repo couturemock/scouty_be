@@ -375,17 +375,17 @@ describe('trend score', () => {
 });
 
 describe('credit budget', () => {
-  it('splits 55/35/10 and lets buckets borrow only from reserve', () => {
+  it('splits 60/30/10 and lets buckets borrow only from reserve', () => {
     const b = new CreditBudget(100);
     expect(b.report().buckets).toEqual({
-      discovery: { allocated: 55, spent: 0 },
-      detail: { allocated: 35, spent: 0 },
+      discovery: { allocated: 60, spent: 0 },
+      detail: { allocated: 30, spent: 0 },
       reserve: { allocated: 10, spent: 0 },
     });
-    expect(b.take('detail', 50)).toBe(45);
-    b.spend('detail', 40);
+    expect(b.take('detail', 50)).toBe(40);
+    b.spend('detail', 35);
     expect(b.report().buckets.reserve.spent).toBe(5);
-    expect(b.available('discovery')).toBe(60);
+    expect(b.available('discovery')).toBe(65);
   });
 
   it('never hands out more than the total', () => {
