@@ -14,6 +14,7 @@ import {
   isMarketplaceDomain,
 } from './dropship-filter';
 import { computeTrendScore, DiscoveryMeta, saturationScore } from './trend-score';
+import { diversifyByCategory } from './trend-discovery.service';
 
 const NOW = 1_800_000_000;
 const DAY = 86_400;
@@ -136,6 +137,23 @@ describe('dropship filter', () => {
     expect(reason('Anything', { title: 'Anything', requiresShipping: false })).toBe('digital_or_service');
   });
 
+  it('rejects plain fashion apparel — weak category for dropshipping', () => {
+    const reason = (title: string) => dropshipFitReason({ title });
+    expect(reason('Aelfric Eden Off-The-Shoulder Pullover Hoodie')).toBe('apparel');
+    expect(reason('Rachel Tie Back Maxi Dress - Chocolate')).toBe('apparel');
+    expect(reason('Classic Blue Denim Jeans')).toBe('apparel');
+    expect(reason('Womens Floral Summer Blouse')).toBe('apparel');
+  });
+
+  it('keeps wearables with an actual functional gimmick, not plain fashion', () => {
+    const reason = (title: string) => dropshipFitReason({ title });
+    expect(reason('Heated Vest Jacket with USB Battery')).toBeNull();
+    expect(reason('LED Light Up Costume Jacket')).toBeNull();
+    expect(reason('Posture Corrector Brace')).toBeNull();
+    // Pet footwear, not human apparel — must not get caught by the garment filter.
+    expect(reason('Outdoor Tree-Climbing Anti-Slip Cat Claw Shoes Set')).toBeNull();
+  });
+
   it('keeps common dropshipping products', () => {
     for (const title of [
       'InstaSeal Vacuum Sealer, LED Touch Control',
@@ -183,6 +201,15 @@ describe('supplier match', () => {
       offerIsSameProduct({ name: 'Women Pendant Necklace Chain', matchedBy: 'image' }, 'APOLLO NECKLACE - GOLD'),
     ).toBe(true);
     expect(offerIsSameProduct({ name: 'Necklace Chain' }, 'APOLLO NECKLACE - GOLD')).toBe(false);
+  });
+
+  it('does not match on shared "anti/slip/outdoor" filler alone (real false positive found live)', () => {
+    expect(
+      offerIsSameProduct(
+        { name: 'Outdoor Anti-slip And Anti-cutting Barefoot Rafting Swimming Shoes' },
+        'Outdoor Tree-Climbing Anti-Slip Cat Claw Shoes Set',
+      ),
+    ).toBe(false);
   });
 });
 
@@ -400,5 +427,50 @@ describe('credit budget', () => {
 describe('categories', () => {
   it('maps a product title to its discovery category', () => {
     expect(categorize({ title: 'Self-cleaning slicker brush for dogs and cats' })).toBe('pets');
+  });
+});
+
+describe('diversifyByCategory', () => {
+  type Candidate = { id: string; meta: { categoryKey: string }; trend: { total: number } };
+
+  const item = (id: string, categoryKey: string, total: number): Candidate => ({
+    id,
+    meta: { categoryKey },
+    trend: { total },
+  });
+
+  it('spreads picks across categories instead of one category eating the whole snapshot', () => {
+    // 5 strong "beauty" candidates vs. 1 each for pets/home — a plain
+    // top-N-by-score sort would have picked all 5 beauty products before
+    // ever reaching pets/home.
+    const candidates = [
+      item('b1', 'beauty', 95),
+      item('b2', 'beauty', 90),
+      item('b3', 'beauty', 85),
+      item('b4', 'beauty', 80),
+      item('b5', 'beauty', 75),
+      item('p1', 'pets', 70),
+      item('h1', 'home', 65),
+    ];
+    const picks = diversifyByCategory(candidates, 3);
+    expect(picks.map((p) => p.id).sort()).toEqual(['b1', 'h1', 'p1']);
+  });
+
+  it('still fills the target from one category when nothing else qualified', () => {
+    const candidates = [item('b1', 'beauty', 95), item('b2', 'beauty', 90), item('b3', 'beauty', 85)];
+    const picks = diversifyByCategory(candidates, 5);
+    expect(picks.map((p) => p.id)).toEqual(['b1', 'b2', 'b3']);
+  });
+
+  it('gives the second-best of each category before a third pick from any one', () => {
+    const candidates = [
+      item('a1', 'a', 100),
+      item('a2', 'a', 90),
+      item('a3', 'a', 80),
+      item('b1', 'b', 60),
+      item('b2', 'b', 50),
+    ];
+    const picks = diversifyByCategory(candidates, 4);
+    expect(picks.map((p) => p.id)).toEqual(['a1', 'b1', 'a2', 'b2']);
   });
 });

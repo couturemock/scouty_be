@@ -119,11 +119,46 @@ function extractList(payload: unknown): AeItem[] {
 export class AliExpressSupplierProvider {
   private readonly logger = new Logger(AliExpressSupplierProvider.name);
   readonly name = 'aliexpress_business_api';
+  private lastCallAt = 0;
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly config: ConfigService) {}
 
   enabled() {
     return Boolean(this.config.get<string>('ALIEXPRESS_RAPIDAPI_KEY')?.trim());
+  }
+
+  private minIntervalMs() {
+    const rps = Number(this.config.get('ALIEXPRESS_RPS') ?? 2);
+    return Number.isFinite(rps) && rps > 0 ? Math.ceil(1000 / rps) : 500;
+  }
+
+  /**
+   * Serializes and paces requests so concurrent callers (keyword + image
+   * search run in parallel per product, across many products at once during
+   * an ingest) respect ALIEXPRESS_RPS instead of bursting past the RapidAPI
+   * plan's rate limit and getting 429'd on every call — found live: every
+   * AliExpress call during a multi-ingest test session came back
+   * "429 Too Many Requests" because nothing paced them (unlike CJ, which
+   * already has this via CJ_RPS).
+   */
+  private paced<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(async () => {
+      const wait = this.lastCallAt + this.minIntervalMs() - Date.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.lastCallAt = Date.now();
+      return fn();
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /** A paced GET, with one short-wait retry if the API still says 429. */
+  private async pacedFetch(url: string): Promise<Response> {
+    const res = await this.paced(() => fetch(url, { method: 'GET', headers: this.headers() }));
+    if (res.status !== 429) return res;
+    await new Promise((r) => setTimeout(r, this.minIntervalMs() * 3));
+    return this.paced(() => fetch(url, { method: 'GET', headers: this.headers() }));
   }
 
   private host() {
@@ -174,7 +209,7 @@ export class AliExpressSupplierProvider {
     const url = `https://${host}/textsearch.php?${params.toString()}`;
 
     try {
-      const res = await fetch(url, { method: 'GET', headers: this.headers() });
+      const res = await this.pacedFetch(url);
       if (!res.ok) {
         this.logger.warn(`AliExpress HTTP ${res.status}: ${res.statusText}`);
         return [];
@@ -221,7 +256,7 @@ export class AliExpressSupplierProvider {
     const url = `https://${host}/imageurl_search.php?${params.toString()}`;
 
     try {
-      const res = await fetch(url, { method: 'GET', headers: this.headers() });
+      const res = await this.pacedFetch(url);
       if (!res.ok) {
         this.logger.warn(`AliExpress image search HTTP ${res.status}: ${res.statusText}`);
         return [];

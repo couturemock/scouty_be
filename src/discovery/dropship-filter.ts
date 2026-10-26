@@ -20,7 +20,8 @@ export type DropshipRejectReason =
   | 'ingestible'
   | 'personalized'
   | 'bulk_supplies'
-  | 'fine_jewelry';
+  | 'fine_jewelry'
+  | 'apparel';
 
 /** data_type 5 game, 6 app, 7 AI, 8 short drama. */
 const NON_STORE_DATA_TYPES = new Set([5, 6, 7, 8]);
@@ -72,6 +73,23 @@ const FINE_JEWELRY = wordBoundary(
 );
 
 /**
+ * Plain fashion garments (dresses, hoodies, jeans…): thin margins once
+ * returns/exchanges from sizing are factored in, and no functional "wow"
+ * that cold traffic can't already get from any clothing store — a known
+ * weak category for cold-traffic dropshipping. Deliberately excludes shoes
+ * (too ambiguous with pet/costume gear, e.g. "cat claw shoes") and anything
+ * matching `FUNCTIONAL_WEARABLE` below, which still earns its place.
+ */
+const GENERIC_APPAREL = wordBoundary(
+  'dress(?:es)?|maxi\\s+dress|vestido[s]?|gown|blouse|blusa|skirt|falda|jeans|denim|trousers?|pantal[oó]n(?:es)?|shorts?|jumpsuit|romper|bodysuit|mono\\s+(?:corto|largo)|overalls?|tunic|t[uú]nica|poncho|cardigan|sweater|su[eé]ter|jumper|pullover|hoodie|sudadera|sweatshirt|blazer|\\bsuit\\b|traje|\\bcoat\\b|abrigo|\\bjacket\\b|chaqueta|\\bshirt\\b|camisa|t-?shirt|camiseta|leggings?|skort|culottes?',
+);
+
+/** A garment earns a pass when it's actually a functional gadget, not plain fashion. */
+const FUNCTIONAL_WEARABLE = wordBoundary(
+  'heated|heating|calefact\\w*|cooling|enfriamiento|compression|compresi[oó]n|posture|postura|weighted|con\\s+peso|\\bled\\b|magnetic|magn[eé]tico|massag(?:e|ing)|masaje|thermal|t[eé]rmic[oa]|electric|el[eé]ctric[oa]|slimming|reductor|shapewear|faja|costume|disfraz|cosplay|anti-?static|waterproof|impermeable|reflective|reflectante|led\\s+light|light[- ]up',
+);
+
+/**
  * Discovery-only fit for dropshipping: something physical that a CJ/AliExpress
  * supplier can hold in stock and ship as-is. Title and Shopify product type
  * decide; store tags only for personalised/digital (merchants tag those reliably).
@@ -94,6 +112,7 @@ export function dropshipFitReason(input: {
   }
   if (BULK_SUPPLIES.test(input.title)) return 'bulk_supplies';
   if (FINE_JEWELRY.test(main)) return 'fine_jewelry';
+  if (GENERIC_APPAREL.test(main) && !FUNCTIONAL_WEARABLE.test(main)) return 'apparel';
   return null;
 }
 

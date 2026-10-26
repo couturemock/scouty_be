@@ -29,7 +29,13 @@ export interface CommercialSignal {
 }
 
 export interface SupplierOffer {
-  source: 'aliexpress' | 'cj';
+  /**
+   * 'ai' = found via OpenAI web search on some real store, last-resort when
+   * CJ/AliExpress have no live match. 'alibaba' = same search, but the cited
+   * page was actually alibaba.com (there is no live Alibaba API — see
+   * `AiSupplierSearchProvider`).
+   */
+  source: 'aliexpress' | 'cj' | 'ai' | 'alibaba';
   name: string;
   listingUrl: string;
   unitPriceEur?: number;

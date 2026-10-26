@@ -2,8 +2,11 @@ import { Module } from '@nestjs/common';
 import { CreativeAdFixtureProvider } from './ads/creative-ad-fixture.provider';
 import { CreativeAdsProvider } from './ads/creative-ads.provider';
 import { KeepaAmazonProvider } from './amazon/keepa.provider';
+import { AiAdSearchProvider } from './openai/ai-ad-search.provider';
+import { AiSupplierSearchProvider } from './openai/ai-supplier-search.provider';
 import { DropshipPrefilterProvider } from './openai/dropship-prefilter.provider';
 import { OpenAiClient } from './openai/openai.client';
+import { SupplierMatchValidatorProvider } from './openai/supplier-match-validator.provider';
 import { PipiAdsCacheService } from './pipiads/pipiads-cache.service';
 import { PipiAdsClient } from './pipiads/pipiads.client';
 import { PipiAdsProvider } from './pipiads/pipiads.provider';
@@ -23,6 +26,9 @@ import { ShopifyStoreClient } from './stores/shopify-store.client';
     KeepaAmazonProvider,
     OpenAiClient,
     DropshipPrefilterProvider,
+    AiSupplierSearchProvider,
+    SupplierMatchValidatorProvider,
+    AiAdSearchProvider,
     AliExpressSupplierProvider,
     CjSupplierProvider,
     SuppliersService,
@@ -37,6 +43,9 @@ import { ShopifyStoreClient } from './stores/shopify-store.client';
     KeepaAmazonProvider,
     OpenAiClient,
     DropshipPrefilterProvider,
+    AiSupplierSearchProvider,
+    SupplierMatchValidatorProvider,
+    AiAdSearchProvider,
     AliExpressSupplierProvider,
     CjSupplierProvider,
     SuppliersService,

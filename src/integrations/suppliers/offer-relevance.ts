@@ -18,7 +18,16 @@ export function offerMatchesSeed(offerName: string, seed: string): boolean {
   return hits.length >= 1;
 }
 
-/** Words that say nothing about which product it is. */
+/**
+ * Words that say nothing about which product it is. Real bug found live: for
+ * "Outdoor Tree-Climbing Anti-Slip Cat Claw Shoes Set", a CJ offer named
+ * "Outdoor Anti-slip And Anti-cutting Barefoot Rafting Swimming Shoes" passed
+ * as "the same product" — "outdoor"/"anti"/"slip"/"shoes" overlapped enough
+ * to clear the threshold while the actually distinguishing words (tree,
+ * climbing, cat, claw) matched zero. These qualifiers show up across huge
+ * swaths of unrelated listings and must never carry a match on their own,
+ * same reasoning as "waterproof"/"wireless"/"portable" below.
+ */
 const GENERIC_TOKENS = new Set(
   (
     'the and for with from new best top pro max plus ultra premium advanced original upgraded ' +
@@ -26,7 +35,8 @@ const GENERIC_TOKENS = new Set(
     'women woman men man unisex kids girl boy gift gifts sale hot free shipping official store ' +
     'gold silver black white rose blue red pink green 2024 2025 2026 para con del las los una uno por ' +
     'led smart portable wireless electric rechargeable automatic touch control usb waterproof ' +
-    'adjustable foldable magnetic multifunctional professional household home'
+    'adjustable foldable magnetic multifunctional professional household home ' +
+    'anti slip non resistant proof outdoor indoor grip duty heavy grade cutting'
   ).split(' '),
 );
 

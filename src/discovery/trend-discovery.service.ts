@@ -6,6 +6,8 @@ import { Repository } from 'typeorm';
 import { jsonSafe } from '../common/json-safe';
 import { shipToCountry } from '../common/ship-to';
 import { computeAdClusterScore } from '../integrations/ads/ad-score';
+import { rebuildSearchLink } from '../integrations/ads/creative-source-url';
+import { AiSupplierSearchProvider } from '../integrations/openai/ai-supplier-search.provider';
 import { DropshipPrefilterProvider } from '../integrations/openai/dropship-prefilter.provider';
 import { PipiAdsCacheService } from '../integrations/pipiads/pipiads-cache.service';
 import { PipiAdsClient } from '../integrations/pipiads/pipiads.client';
@@ -98,6 +100,50 @@ function inc(map: Record<string, number>, key: string) {
   map[key] = (map[key] ?? 0) + 1;
 }
 
+/**
+ * Spread the final picks across categories instead of a plain top-N sort,
+ * which let one category with a strong week (e.g. a pile of high-scoring
+ * "Belleza" products) crowd out every other category from the whole
+ * snapshot. Round-robin: best-of-each-category first, then
+ * second-best-of-each, and so on. Never leaves a slot empty just to enforce
+ * a quota — once a category runs out of live candidates it's simply skipped
+ * for the rest of the rounds, so a single strong category still fills
+ * `target` on its own if nothing else qualified that week.
+ */
+export function diversifyByCategory<
+  T extends { meta: Pick<DiscoveryMeta, 'categoryKey'>; trend: Pick<TrendScoreBreakdown, 'total'> },
+>(candidates: T[], target: number): T[] {
+  const byCategory = new Map<string, T[]>();
+  for (const c of candidates) {
+    const key = c.meta.categoryKey;
+    const list = byCategory.get(key);
+    if (list) list.push(c);
+    else byCategory.set(key, [c]);
+  }
+  for (const list of byCategory.values()) {
+    list.sort((a, b) => b.trend.total - a.trend.total);
+  }
+  // Categories with the strongest top candidate get first pick each round.
+  const categories = [...byCategory.keys()].sort(
+    (a, b) => byCategory.get(b)![0]!.trend.total - byCategory.get(a)![0]!.trend.total,
+  );
+
+  const picks: T[] = [];
+  for (let round = 0; picks.length < target; round++) {
+    let addedThisRound = false;
+    for (const key of categories) {
+      if (picks.length >= target) break;
+      const item = byCategory.get(key)![round];
+      if (item) {
+        picks.push(item);
+        addedThisRound = true;
+      }
+    }
+    if (!addedThisRound) break;
+  }
+  return picks;
+}
+
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -134,6 +180,7 @@ export class TrendDiscoveryService {
     private readonly pipiadsClient: PipiAdsClient,
     private readonly pipiadsCache: PipiAdsCacheService,
     private readonly aiPrefilter: DropshipPrefilterProvider,
+    private readonly aiSupplier: AiSupplierSearchProvider,
     private readonly suppliers: SuppliersService,
     private readonly store: ShopifyStoreClient,
     @InjectRepository(Product) private readonly products: Repository<Product>,
@@ -542,6 +589,7 @@ export class TrendDiscoveryService {
           c.priceEur ?? undefined,
           market,
           c.imageUrl,
+          { skipAiFallback: true }, // batched separately below, not one AI call per product
         );
         c.suppliers = offers.filter((o) => o.kind !== 'live' || offerIsSameProduct(o, c.title));
       } catch (err) {
@@ -551,6 +599,30 @@ export class TrendDiscoveryService {
       supplierDone += 1;
       if (supplierDone % 5 === 0) progress('suppliers', supplierDone, shortlist.length);
     });
+
+    // CJ alone isn't treated as "covered" — batch a second-opinion price
+    // (Alibaba-first via AI) for every product that doesn't already have a
+    // live non-CJ offer, AI_SUPPLIER_BATCH_SIZE products per request instead
+    // of one request each.
+    const needsSecondOpinion = shortlist.filter(
+      (c) => !(c.suppliers ?? []).some((o) => o.kind === 'live' && o.source !== 'cj'),
+    );
+    if (needsSecondOpinion.length) {
+      progress('suppliers-ai', 0, needsSecondOpinion.length);
+      const aiOffers = await this.aiSupplier.findPricesBatch(
+        needsSecondOpinion.map((c) => ({ title: c.title, salePriceEur: c.priceEur ?? undefined })),
+        market,
+      );
+      aiOffers.forEach((offer, i) => {
+        if (!offer) return;
+        const c = needsSecondOpinion[i]!;
+        const existing = c.suppliers ?? [];
+        // A real AI-sourced price makes the "search this on AliExpress"
+        // placeholder links redundant noise next to it.
+        c.suppliers = [...existing.filter((o) => o.kind === 'live'), offer];
+      });
+      progress('suppliers-ai', needsSecondOpinion.length, needsSecondOpinion.length);
+    }
 
     type Scored = { cluster: ProductCluster; meta: DiscoveryMeta; trend: TrendScoreBreakdown; live: boolean };
     const scored: Scored[] = shortlist.map((cluster) => {
@@ -570,10 +642,10 @@ export class TrendDiscoveryService {
       };
     });
     for (const s of scored) if (!s.live) inc(result.productsRejected, 'no_supplier_match');
-    const picks = scored
-      .filter((s) => s.live)
-      .sort((a, b) => b.trend.total - a.trend.total)
-      .slice(0, productsTarget);
+    const picks = diversifyByCategory(
+      scored.filter((s) => s.live),
+      productsTarget,
+    );
 
     progress('shipping', 0, picks.length);
     for (const pick of picks) {
@@ -615,10 +687,11 @@ export class TrendDiscoveryService {
     const best = bestLandedOffer(offers);
     const margin = marginFor(cluster.priceEur, best);
     const fees = cluster.priceEur ? Number((cluster.priceEur * 0.15).toFixed(2)) : null;
+    const cleanTitleForSearch = cleanTitle(cluster.title) || 'Producto';
     const creatives = [...cluster.ads]
       .sort((a, b) => b.plays - a.plays)
       .slice(0, 12)
-      .map((a) => a.creative);
+      .map((a) => rebuildSearchLink(a.creative, cleanTitleForSearch, market));
 
     const product =
       (await this.products.findOne({ where: { slug } })) ??

@@ -196,16 +196,16 @@ export function resolveCreativeSourceUrl(opts: {
     return { url: metaAdLibraryAdUrl(archiveId, 'ALL'), kind: 'ad' }
   }
 
+  // TikTok resolves /video/{id} by id regardless of the @handle in the path —
+  // but checked live against real PipiAds /adspy/list payloads (2026-10-23):
+  // there is no `aweme_id`/`awemeId`/`tiktok_id` field at all, only PipiAds'
+  // own opaque `video_id`/`id` (not a real TikTok id, can't build this URL
+  // from it). Kept as a forward-compatible fallback in case a future PipiAds
+  // response variant includes a real id — currently dead in practice, so the
+  // TikTok search link below is what actually renders today.
   const videoId = pickString(raw, ['aweme_id', 'awemeId', 'tiktok_id'])
   if (opts.platform === 'tiktok' && videoId && /^\d{8,}$/.test(videoId)) {
-    return {
-      url: tiktokAdLibrarySearchUrl(
-        pickString(raw, ['advertiser_name', 'brand_name', 'desc']) ||
-          opts.productTitle,
-        country,
-      ),
-      kind: 'search',
-    }
+    return { url: tiktokVideoUrl(videoId), kind: 'ad' }
   }
 
   // Do NOT open PipiAds CDN as the primary link (browser downloads the file).
@@ -218,4 +218,27 @@ export function resolveCreativeSourceUrl(opts: {
   }
 
   return { url: metaAdLibrarySearchUrl(term, country), kind: 'search' }
+}
+
+/**
+ * An ad's search-link `sourceUrl` is built at discovery time, before the ad
+ * is clustered into a product — the only "title" on hand then is the ad's
+ * own copy (or a category seed), which can be an unrelated hook line (e.g.
+ * "wann deutschrap wieder…" for a Spark Ad that's really selling a hoodie).
+ * Once the product's real, clean title is known, call this to rebuild the
+ * search link from that instead. Direct ('ad') links are left untouched —
+ * those already point at a real ad/page and don't depend on the title.
+ */
+export function rebuildSearchLink<T extends { platform: CreativePlatform; sourceUrl?: string; publicSignals?: Record<string, unknown> }>(
+  creative: T,
+  productTitle: string,
+  country = 'ES',
+): T {
+  if (creative.publicSignals?.linkKind !== 'search') return creative
+  const term = librarySearchTerm(productTitle)
+  const sourceUrl =
+    creative.platform === 'tiktok'
+      ? tiktokAdLibrarySearchUrl(term, country)
+      : metaAdLibrarySearchUrl(term, country)
+  return { ...creative, sourceUrl }
 }
