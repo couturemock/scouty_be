@@ -23,7 +23,11 @@ export class IngestionProcessor extends WorkerHost {
       productsTarget,
       creditBudget,
       onProgress: (progress) => {
-        void job.updateProgress(progress);
+        // `void` only discards the resolved value — if this rejects (a
+        // transient Redis blip, same class of bug just fixed in
+        // PipiAdsCacheService), it's still an unhandled rejection that can
+        // crash the whole worker process over a mere progress update.
+        job.updateProgress(progress).catch(() => undefined);
       },
     });
     this.logger.log(

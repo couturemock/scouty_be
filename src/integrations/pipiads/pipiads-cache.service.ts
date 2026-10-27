@@ -74,7 +74,14 @@ export class PipiAdsCacheService {
       isLeader = true;
       pending = this.resolveEntry(cacheKey, ttlSec, fetchFn);
       this.inFlight.set(cacheKey, pending);
-      pending.finally(() => this.inFlight.delete(cacheKey));
+      // `promise.finally(cb)` returns a NEW promise that adopts the
+      // original's rejection — nobody awaits that one (the real `pending`
+      // below is what callers await), so an unhandled rejection on it
+      // crashes the whole Node process on every transient PipiAds network
+      // error. Confirmed live: `fetch failed` / ECONNRESET during a real
+      // ingest killed the entire worker, not just that one job, forcing a
+      // full container restart (and the job to start over from scratch).
+      pending.finally(() => this.inFlight.delete(cacheKey)).catch(() => undefined);
     }
 
     const result = await pending;

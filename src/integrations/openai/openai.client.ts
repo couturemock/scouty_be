@@ -53,6 +53,20 @@ export class OpenAiClient {
     return Boolean(this.apiKey);
   }
 
+  /**
+   * Found live: a stalled OpenAI request with no timeout hangs the `await`
+   * forever — no error, no progress, the whole ingestion job frozen. Every
+   * request below carries this so a stall degrades to a normal
+   * catch-and-continue failure (every caller already treats a thrown error
+   * this way) instead of blocking the worker indefinitely. `searchWeb` gets
+   * a longer budget since a real `web_search` tool call takes longer than a
+   * plain chat completion.
+   */
+  private timeoutMs(key: string, fallback: number) {
+    const n = Number(this.config.get(key) ?? fallback);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  }
+
   /** Chat Completions with a forced JSON object response. */
   async completeJson<T = unknown>(input: {
     system: string;
@@ -79,6 +93,7 @@ export class OpenAiClient {
         temperature: 0,
         max_tokens: input.maxOutputTokens ?? 300,
       }),
+      signal: AbortSignal.timeout(this.timeoutMs('OPENAI_TIMEOUT_MS', 20_000)),
     });
 
     if (!response.ok) {
@@ -147,6 +162,7 @@ export class OpenAiClient {
         // actually want to check a claimed URL against.
         include: ['web_search_call.action.sources'],
       }),
+      signal: AbortSignal.timeout(this.timeoutMs('OPENAI_WEB_SEARCH_TIMEOUT_MS', 45_000)),
     });
 
     if (!response.ok) {

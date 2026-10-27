@@ -77,4 +77,29 @@ describe('PipiAdsCacheService', () => {
     cache.resetStats();
     expect(cache.stats()).toEqual({ hits: 0, misses: 0 });
   });
+
+  it('never produces an unhandled rejection when fetchFn fails (real crash found live)', async () => {
+    // Real incident: a transient PipiAds network error (`fetch failed` /
+    // ECONNRESET) crashed the whole worker process, not just that one job —
+    // `pending.finally(() => ...)` returns a second promise that also
+    // rejects, and nothing was listening to IT (only `pending` itself was
+    // awaited), which Node treats as an unhandled rejection and kills the
+    // process. If this regresses, this test's `unhandledRejection` listener
+    // fires and the assertion below fails.
+    const unhandled: unknown[] = [];
+    const onUnhandled = (err: unknown) => unhandled.push(err);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const cache = new PipiAdsCacheService(config());
+      const key = cache.key('/v3/api/open/adspy/detail', { id: 'crash-case' });
+      await expect(
+        cache.getOrFetch(key, 60, () => Promise.reject(new Error('fetch failed'))),
+      ).rejects.toThrow('fetch failed');
+      // Give the detached `.finally()` promise's microtask a chance to fire.
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
 });
