@@ -36,6 +36,24 @@ const STOP = new Set([
   'black',
   'white',
   'set',
+  // Promo/marketing filler that ad-copy-derived titles pile on (e.g. "X +
+  // FREE Gift Box") — it identifies the OFFER, not the product, and
+  // confirmed live to actively hurt supplier search: "Eternal Hug
+  // Necklace FREE Gift" matched CJ's generic "Gift"-themed necklaces
+  // (Valentine's, Mother's Day, faith pendants — nothing like the real
+  // product), while "Eternal Hug Necklace" alone surfaced real "Love Hug
+  // Necklace" listings that are a genuine match.
+  'free',
+  'gift',
+  'gifts',
+  'box',
+  'bonus',
+  'bundle',
+  'deal',
+  'sale',
+  'offer',
+  'included',
+  'extra',
 ]);
 
 /** Common ES product words → EN (AliExpress search better in English). */

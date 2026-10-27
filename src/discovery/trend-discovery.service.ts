@@ -12,6 +12,7 @@ import { DropshipPrefilterProvider } from '../integrations/openai/dropship-prefi
 import { PipiAdsCacheService } from '../integrations/pipiads/pipiads-cache.service';
 import { PipiAdsClient } from '../integrations/pipiads/pipiads.client';
 import { PipiAdsProvider } from '../integrations/pipiads/pipiads.provider';
+import { BIG_BRAND_WORDS } from '../integrations/shared/brand-denylist';
 import { ShopifyStoreClient } from '../integrations/stores/shopify-store.client';
 import { offerIsSameProduct } from '../integrations/suppliers/offer-relevance';
 import { SuppliersService } from '../integrations/suppliers/suppliers.service';
@@ -30,6 +31,7 @@ import {
   adRejectReason,
   DEFAULT_PRICE_BAND,
   dropshipRejectReason,
+  ENTERTAINMENT_WORDS,
   PriceBand,
 } from './dropship-filter';
 import {
@@ -69,6 +71,14 @@ export type DiscoveryResult = {
   saved: number;
   withSupplier: number;
   credits: number;
+  /** What the caller actually asked for, so "saved < productsTarget" isn't silently ambiguous. */
+  productsTarget: number;
+  /** How many discovery rounds it took — see MAX_ROUNDS in `run()`. */
+  rounds: number;
+  /** True only if it stopped short of `productsTarget` because the credit budget ran out. */
+  stoppedOnBudget: boolean;
+  /** True only if it stopped short because there were no more candidate ads to try. */
+  stoppedOnEmptyPool: boolean;
 };
 
 type ListPlan = {
@@ -83,7 +93,7 @@ export const MAX_PRODUCTS_TARGET = 200;
 export const DEFAULT_PRODUCTS_TARGET = 100;
 /** PipiAds regions scanned for the global catalogue (English + main EU dropshipping markets). */
 const DEFAULT_REGIONS = ['US', 'GB', 'CA', 'AU', 'ES', 'DE', 'FR', 'IT'];
-function emptyResult(): DiscoveryResult {
+function emptyResult(productsTarget = 0): DiscoveryResult {
   return {
     adsSeen: 0,
     adsRejected: {},
@@ -93,6 +103,10 @@ function emptyResult(): DiscoveryResult {
     saved: 0,
     withSupplier: 0,
     credits: 0,
+    productsTarget,
+    rounds: 0,
+    stoppedOnBudget: false,
+    stoppedOnEmptyPool: false,
   };
 }
 
@@ -242,7 +256,7 @@ export class TrendDiscoveryService {
     }
 
     const budget = new CreditBudget(total);
-    let result: DiscoveryResult = emptyResult();
+    let result: DiscoveryResult = emptyResult(opts.productsTarget);
     if (total > 0) {
       try {
         result = await this.run(weekKey, {
@@ -252,7 +266,7 @@ export class TrendDiscoveryService {
         });
       } catch (err) {
         this.logger.warn(`Discovery falló: ${err}`);
-        result = { ...emptyResult(), credits: budget.spent };
+        result = { ...emptyResult(opts.productsTarget), credits: budget.spent };
       }
     }
     const spent = budget.spent;
@@ -290,10 +304,21 @@ export class TrendDiscoveryService {
    * - `button` is ignored by the API (same totals with/without) → not used.
    */
   private listPlans(discoveryCredits: number, nowSec: number): ListPlan[] {
+    // PipiAds bills 1 credit per ad *returned* — these two cut cost at the
+    // source instead of paying to see, then rejecting for free, the same
+    // app/game/non-product and big-brand/entertainment ads every run.
+    // Confirmed live against the real API: `exclude_word` genuinely filters
+    // (excluding a term removed every ad mentioning it from the response).
+    const excludeWord = [...BIG_BRAND_WORDS, ...ENTERTAINMENT_WORDS].map((keyword) => ({
+      type: 2, // "Ad copy", per PipiAds' docs — same field `adRejectReason` checks for free.
+      keyword,
+    }));
     const base = {
       region: this.regions(),
       shop_type: this.shopTypes(),
       ad_state: 1,
+      is_product: true, // "has ad product" — drops app/game/pure-content ads we'd reject as app_or_game/non_product anyway.
+      exclude_word: excludeWord,
     };
     const dataType = (plat: 1 | 2) => (plat === 1 ? [1, 3] : [3]);
     const broadQuota = Math.floor((discoveryCredits * BROAD_PASS_SHARE) / 4);
@@ -356,18 +381,35 @@ export class TrendDiscoveryService {
     return plans;
   }
 
+  /** Stable identity for a plan across calls — the array index isn't: a plan can drop out
+   *  (e.g. a seed pass skipped once the remaining budget is too small) when `listPlans` is
+   *  re-run with a smaller `discoveryCredits` on a later round. */
+  private planKey(plan: ListPlan): string {
+    return `${plan.pass}:${plan.seed ?? ''}:${JSON.stringify(plan.params.plat_type)}`;
+  }
+
+  /**
+   * `pageCursor` lets the caller ask for another round of ads without
+   * re-fetching the same top-ranked page it already paid for — each plan
+   * resumes from the page it left off at, keyed by `planKey` (not array
+   * index, which can shift between calls). Pass a fresh empty map for a
+   * one-shot call; pass the same map back in across rounds to keep going.
+   */
   private async collectAds(
     budget: CreditBudget,
     nowSec: number,
     progress: (step: string, done: number, total: number) => void,
+    pageCursor: Map<string, number> = new Map(),
   ): Promise<DiscoveredAd[]> {
     const market = this.shipTo();
     const plans = this.listPlans(budget.available('discovery'), nowSec);
     const byId = new Map<string, DiscoveredAd>();
     for (const [i, plan] of plans.entries()) {
       progress('discovery', i, plans.length);
+      const key = this.planKey(plan);
       let spentOnPlan = 0;
-      for (let page = 1; spentOnPlan < plan.quota; page += 1) {
+      let page = pageCursor.get(key) ?? 1;
+      for (; spentOnPlan < plan.quota; page += 1) {
         const size = budget.take('discovery', Math.min(plan.pageSize, plan.quota - spentOnPlan));
         if (size <= 0) break;
         try {
@@ -380,12 +422,17 @@ export class TrendDiscoveryService {
           for (const ad of ads) {
             if (!byId.has(ad.videoId)) byId.set(ad.videoId, ad);
           }
-          if (!hasNext || ads.length < size) break;
+          if (!hasNext || ads.length < size) {
+            page += 1;
+            break;
+          }
         } catch (err) {
           this.logger.warn(`Discovery ${plan.pass}${plan.seed ? `:${plan.seed}` : ''} p${page}: ${err}`);
+          page += 1;
           break;
         }
       }
+      pageCursor.set(key, page);
       if (budget.available('discovery') <= 0) break;
     }
     return [...byId.values()];
@@ -521,25 +568,8 @@ export class TrendDiscoveryService {
       opts.onProgress?.({ step, done, total, creditsSpent: budget.spent });
     const startSpent = budget.spent;
 
-    const result = emptyResult();
+    const result = emptyResult(productsTarget);
 
-    // 1. Filtered ad scans (TikTok + Meta, new + sustained + category seeds).
-    const ads = await this.collectAds(budget, nowSec, progress);
-    result.adsSeen = ads.length;
-
-    // 2. Ad-level dropshipping gate (free: list fields only).
-    const candidates = ads.filter((ad) => {
-      const reason = adRejectReason(ad);
-      if (reason) inc(result.adsRejected, reason);
-      return !reason;
-    });
-
-    // 3. Product identity: detail (1 credit) for the strongest ads.
-    progress('detail', 0, candidates.length);
-    result.adsDetailed = await this.detailAds(candidates, budget, progress);
-
-    // 4. Cluster into products + product-level gate.
-    progress('cluster', 0, 1);
     const productLevel = (c: ProductCluster) => {
       const rep = c.ads.find((a) => a.detail?.storeName) ?? c.ads[0];
       return dropshipRejectReason(
@@ -556,96 +586,165 @@ export class TrendDiscoveryService {
         band,
       );
     };
-    let clusters = buildClusters(candidates).filter((c) => {
-      const reason = productLevel(c);
-      if (reason) inc(result.productsRejected, reason);
-      return !reason;
-    });
-    result.clusters = clusters.length;
-
-    // 5. Rank by ad signals alone, then spend the free/cheap enrichment on the best.
-    const preScore = (c: ProductCluster) =>
-      computeTrendScore(this.discoveryMetaFor(c, 'other'), [], nowSec).total;
-    clusters.sort((a, b) => preScore(b) - preScore(a));
-    clusters = clusters.slice(0, Math.min(productsTarget * 2, 400));
-
-    progress('store', 0, clusters.length);
-    await this.enrichFromStore(clusters);
-    clusters = clusters.filter((c) => {
-      const reason = productLevel(c);
-      if (reason) inc(result.productsRejected, reason);
-      return !reason;
-    });
-
-    // 6. Suppliers (CJ + AliExpress) for the shortlist; CJ freight for the final picks.
-    // Products without a verified supplier are dropped, so look up a wider list.
-    const shortlist = clusters.slice(0, productsTarget * 2);
-    let supplierDone = 0;
-    await mapLimit(shortlist, 2, async (c) => {
-      try {
-        const offers = await this.suppliers.findRelated(
-          c.title,
-          6,
-          c.priceEur ?? undefined,
-          market,
-          c.imageUrl,
-          { skipAiFallback: true }, // batched separately below, not one AI call per product
-        );
-        c.suppliers = offers.filter((o) => o.kind !== 'live' || offerIsSameProduct(o, c.title));
-      } catch (err) {
-        this.logger.warn(`Suppliers "${c.title.slice(0, 40)}": ${err}`);
-        c.suppliers = [];
-      }
-      supplierDone += 1;
-      if (supplierDone % 5 === 0) progress('suppliers', supplierDone, shortlist.length);
-    });
-
-    // CJ alone isn't treated as "covered" — batch a second-opinion price
-    // (Alibaba-first via AI) for every product that doesn't already have a
-    // live non-CJ offer, AI_SUPPLIER_BATCH_SIZE products per request instead
-    // of one request each.
-    const needsSecondOpinion = shortlist.filter(
-      (c) => !(c.suppliers ?? []).some((o) => o.kind === 'live' && o.source !== 'cj'),
-    );
-    if (needsSecondOpinion.length) {
-      progress('suppliers-ai', 0, needsSecondOpinion.length);
-      const aiOffers = await this.aiSupplier.findPricesBatch(
-        needsSecondOpinion.map((c) => ({ title: c.title, salePriceEur: c.priceEur ?? undefined })),
-        market,
-      );
-      aiOffers.forEach((offer, i) => {
-        if (!offer) return;
-        const c = needsSecondOpinion[i]!;
-        const existing = c.suppliers ?? [];
-        // A real AI-sourced price makes the "search this on AliExpress"
-        // placeholder links redundant noise next to it.
-        c.suppliers = [...existing.filter((o) => o.kind === 'live'), offer];
-      });
-      progress('suppliers-ai', needsSecondOpinion.length, needsSecondOpinion.length);
-    }
 
     type Scored = { cluster: ProductCluster; meta: DiscoveryMeta; trend: TrendScoreBreakdown; live: boolean };
-    const scored: Scored[] = shortlist.map((cluster) => {
-      const categoryKey = categorize({
-        title: cluster.title,
-        tags: cluster.aiTags,
-        productType: cluster.store?.productType,
-        seeds: cluster.seeds,
+    const allScored: Scored[] = [];
+    const seenClusterKeys = new Set<string>();
+    const pageCursor = new Map<string, number>();
+    let picks: Scored[] = [];
+
+    // `productsTarget` used to just cap how many of the ALREADY-DISCOVERED
+    // candidates got a supplier lookup (`clusters.slice(0, productsTarget *
+    // 2)`) — so a big credit budget with a modest target paid PipiAds to
+    // discover far more candidates than it ever evaluated for a supplier,
+    // discarding the rest even though nothing about evaluating them costs
+    // more PipiAds credit (CJ/AliExpress/AI lookups don't touch this
+    // budget). And if that artificially-small slice came up empty — CJ rate
+    // limited, AliExpress's quota exhausted, bad matches — the run still
+    // reported 0 saved despite having paid for a wider, possibly better,
+    // pool it never looked at. Fixed by looping: each round asks for
+    // MORE ads (continuing pagination via `pageCursor`, never re-paying
+    // for a page already fetched) and evaluates ALL of this round's new
+    // clusters for a supplier, until the target is met, the credit budget
+    // (the hard cap the caller set) is exhausted, or a round turns up
+    // nothing new to try.
+    const MAX_ROUNDS = 5;
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      // Checked up front (not just after a round) so a round that starts
+      // with nothing left to spend is correctly reported as "ran out of
+      // budget", not misread as "ran out of candidates" just because
+      // `collectAds` had nothing to fetch with.
+      if (round > 0 && budget.remaining <= 0) {
+        result.stoppedOnBudget = true;
+        break;
+      }
+      result.rounds = round + 1;
+      // 1. Filtered ad scans (TikTok + Meta, new + sustained + category seeds).
+      const ads = await this.collectAds(budget, nowSec, progress, pageCursor);
+      if (!ads.length) {
+        result.stoppedOnEmptyPool = true;
+        break;
+      }
+      result.adsSeen += ads.length;
+
+      // 2. Ad-level dropshipping gate (free: list fields only).
+      const roundCandidates = ads.filter((ad) => {
+        const reason = adRejectReason(ad);
+        if (reason) inc(result.adsRejected, reason);
+        return !reason;
       });
-      const meta = this.discoveryMetaFor(cluster, categoryKey);
-      const offers = cluster.suppliers ?? [];
-      return {
-        cluster,
-        meta,
-        trend: computeTrendScore(meta, offers, nowSec),
-        live: offers.some((o) => o.kind === 'live'),
-      };
-    });
-    for (const s of scored) if (!s.live) inc(result.productsRejected, 'no_supplier_match');
-    const picks = diversifyByCategory(
-      scored.filter((s) => s.live),
-      productsTarget,
-    );
+
+      // 3. Product identity: detail (1 credit) for the strongest ads.
+      progress('detail', 0, roundCandidates.length);
+      result.adsDetailed += await this.detailAds(roundCandidates, budget, progress);
+
+      // 4. Cluster into products + product-level gate (skip clusters an
+      // earlier round already has — a store/landing page can resurface
+      // across rounds once its ads start getting detailed again).
+      progress('cluster', 0, 1);
+      let roundClusters = buildClusters(roundCandidates).filter((c) => {
+        if (seenClusterKeys.has(c.key)) return false;
+        const reason = productLevel(c);
+        if (reason) inc(result.productsRejected, reason);
+        return !reason;
+      });
+      roundClusters.forEach((c) => seenClusterKeys.add(c.key));
+
+      // 5. Rank by ad signals alone, then spend the free/cheap enrichment on
+      // the best. The 400 ceiling is a latency safety valve for one round
+      // (CJ/AliExpress/AI lookups take real wall-clock time), not tied to
+      // productsTarget — a round that discovers fewer than that evaluates
+      // all of them regardless of how small the target is.
+      const preScore = (c: ProductCluster) =>
+        computeTrendScore(this.discoveryMetaFor(c, 'other'), [], nowSec).total;
+      roundClusters.sort((a, b) => preScore(b) - preScore(a));
+      roundClusters = roundClusters.slice(0, 400);
+
+      progress('store', 0, roundClusters.length);
+      await this.enrichFromStore(roundClusters);
+      roundClusters = roundClusters.filter((c) => {
+        const reason = productLevel(c);
+        if (reason) inc(result.productsRejected, reason);
+        return !reason;
+      });
+      result.clusters += roundClusters.length;
+
+      // 6. Suppliers (CJ + AliExpress) for this round's clusters; CJ freight
+      // for the final picks only, once the loop is done.
+      let supplierDone = 0;
+      await mapLimit(roundClusters, 2, async (c) => {
+        try {
+          const offers = await this.suppliers.findRelated(
+            c.title,
+            6,
+            c.priceEur ?? undefined,
+            market,
+            c.imageUrl,
+            { skipAiFallback: true }, // batched separately below, not one AI call per product
+          );
+          c.suppliers = offers.filter((o) => o.kind !== 'live' || offerIsSameProduct(o, c.title));
+        } catch (err) {
+          this.logger.warn(`Suppliers "${c.title.slice(0, 40)}": ${err}`);
+          c.suppliers = [];
+        }
+        supplierDone += 1;
+        if (supplierDone % 5 === 0) progress('suppliers', supplierDone, roundClusters.length);
+      });
+
+      // CJ alone isn't treated as "covered" — batch a second-opinion price
+      // (Alibaba-first via AI) for every product that doesn't already have a
+      // live non-CJ offer, AI_SUPPLIER_BATCH_SIZE products per request instead
+      // of one request each.
+      const needsSecondOpinion = roundClusters.filter(
+        (c) => !(c.suppliers ?? []).some((o) => o.kind === 'live' && o.source !== 'cj'),
+      );
+      if (needsSecondOpinion.length) {
+        progress('suppliers-ai', 0, needsSecondOpinion.length);
+        const aiOffers = await this.aiSupplier.findPricesBatch(
+          needsSecondOpinion.map((c) => ({ title: c.title, salePriceEur: c.priceEur ?? undefined })),
+          market,
+        );
+        aiOffers.forEach((offer, i) => {
+          if (!offer) return;
+          const c = needsSecondOpinion[i]!;
+          const existing = c.suppliers ?? [];
+          // A real AI-sourced price makes the "search this on AliExpress"
+          // placeholder links redundant noise next to it.
+          c.suppliers = [...existing.filter((o) => o.kind === 'live'), offer];
+        });
+        progress('suppliers-ai', needsSecondOpinion.length, needsSecondOpinion.length);
+      }
+
+      const roundScored: Scored[] = roundClusters.map((cluster) => {
+        const categoryKey = categorize({
+          title: cluster.title,
+          tags: cluster.aiTags,
+          productType: cluster.store?.productType,
+          seeds: cluster.seeds,
+        });
+        const meta = this.discoveryMetaFor(cluster, categoryKey);
+        const offers = cluster.suppliers ?? [];
+        return {
+          cluster,
+          meta,
+          trend: computeTrendScore(meta, offers, nowSec),
+          live: offers.some((o) => o.kind === 'live'),
+        };
+      });
+      for (const s of roundScored) if (!s.live) inc(result.productsRejected, 'no_supplier_match');
+      allScored.push(...roundScored);
+
+      picks = diversifyByCategory(
+        allScored.filter((s) => s.live),
+        productsTarget,
+      );
+
+      if (picks.length >= productsTarget) break;
+      if (budget.remaining <= 0) {
+        result.stoppedOnBudget = true;
+        break;
+      }
+    }
 
     progress('shipping', 0, picks.length);
     for (const pick of picks) {
@@ -668,8 +767,15 @@ export class TrendDiscoveryService {
     }
 
     result.credits = budget.spent - startSpent;
+    const shortfallReason = result.stoppedOnBudget
+      ? 'tope de créditos agotado'
+      : result.stoppedOnEmptyPool
+        ? 'sin más anuncios candidatos'
+        : null;
     this.logger.log(
-      `Discovery week=${weekKey} regions=${this.regions().join(',')} shipTo=${market}: ads=${result.adsSeen} detailed=${result.adsDetailed} clusters=${result.clusters} saved=${result.saved} withSupplier=${result.withSupplier} credits=${result.credits} adsRejected=${JSON.stringify(result.adsRejected)} productsRejected=${JSON.stringify(result.productsRejected)}`,
+      `Discovery week=${weekKey} regions=${this.regions().join(',')} shipTo=${market}: target=${result.saved}/${productsTarget} rounds=${result.rounds} ads=${result.adsSeen} detailed=${result.adsDetailed} clusters=${result.clusters} saved=${result.saved} withSupplier=${result.withSupplier} credits=${result.credits}` +
+        (shortfallReason ? ` shortfall=${shortfallReason}` : '') +
+        ` adsRejected=${JSON.stringify(result.adsRejected)} productsRejected=${JSON.stringify(result.productsRejected)}`,
     );
     return result;
   }

@@ -514,6 +514,7 @@ export class PipiAdsProvider {
     const tags = Array.isArray(raw.ai_analysis_tags)
       ? (raw.ai_analysis_tags as unknown[]).map((t) => String(t)).filter(Boolean)
       : [];
+    const script = raw.had_ai_analysis ? String(raw.ai_analysis_script ?? '').trim() || null : null;
     creative.publicSignals = {
       ...creative.publicSignals,
       storeId: raw.store_id ?? null,
@@ -526,6 +527,7 @@ export class PipiAdsProvider {
       videoId,
       platform: creative.platform,
       copy,
+      script,
       advertiser:
         String(raw.unique_id ?? raw.app_name ?? '').trim() || null,
       advertiserId: String(raw.root_path_id ?? '').trim() || null,

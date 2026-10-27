@@ -18,6 +18,15 @@ export type DiscoveredAd = {
   videoId: string;
   platform: CreativeAd['platform'];
   copy: string;
+  /**
+   * PipiAds' own AI transcript of the ad's spoken/on-screen content
+   * (`ai_analysis_script`), free in the list response — not every ad has
+   * one (`had_ai_analysis` is false for most non-video ads). Much more
+   * useful than `copy` alone for judging dropship fit: a hook like
+   * "Genetics." says nothing on its own, but its script ("...It's a
+   * hydrating serum and gentle exfoliator...") names the actual product.
+   */
+  script: string | null;
   advertiser: string | null;
   advertiserId: string | null;
   storeId: string | null;

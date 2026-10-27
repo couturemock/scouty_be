@@ -381,11 +381,16 @@ export class ProductsService {
     await this.rebuildRankings(weekKey);
 
     const count = await this.countForWeek(weekKey);
+    const shortfall = run.result.stoppedOnBudget
+      ? ' · se agotó el tope de créditos antes de llegar al target'
+      : run.result.stoppedOnEmptyPool
+        ? ' · no hay más anuncios candidatos para seguir'
+        : '';
     await this.catalog.markIngested(
       weekKey,
       [],
       count,
-      `PipiAds · ${run.budget.spent}/${run.budget.total} créditos (caché: ${run.cache.hits} hits/${run.cache.misses} misses) · ${run.result.saved} productos (${run.result.withSupplier} con proveedor)${run.pipiadsRemaining != null ? ` · quedan ${run.pipiadsRemaining}` : ''}`,
+      `PipiAds · ${run.budget.spent}/${run.budget.total} créditos (caché: ${run.cache.hits} hits/${run.cache.misses} misses) · ${run.result.saved}/${run.result.productsTarget} productos pedidos (${run.result.withSupplier} con proveedor, ${run.result.rounds} ronda${run.result.rounds === 1 ? '' : 's'})${shortfall}${run.pipiadsRemaining != null ? ` · quedan ${run.pipiadsRemaining}` : ''}`,
     );
     this.logger.log(
       `Snapshot ${weekKey} guardado · ${count} productos · credits=${run.budget.spent}`,

@@ -24,6 +24,7 @@ function ad(over: Partial<DiscoveredAd> = {}): DiscoveredAd {
     videoId: 'v1',
     platform: 'tiktok',
     copy: 'This posture corrector fixed my back in a week',
+    script: null,
     advertiser: 'Backfix',
     advertiserId: 'a1',
     storeId: 's1',

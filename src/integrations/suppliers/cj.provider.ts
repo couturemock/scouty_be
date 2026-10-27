@@ -98,6 +98,7 @@ export class CjSupplierProvider {
   private token: { access: string; refresh: string | null; expiresAt: number } | null = null;
   private lastCallAt = 0;
   private queue: Promise<unknown> = Promise.resolve();
+  private authInFlight: Promise<string | null> | null = null;
 
   constructor(private readonly config: ConfigService) {}
 
@@ -134,12 +135,30 @@ export class CjSupplierProvider {
     const apiKey = this.config.get<string>('CJ_API_KEY')?.trim();
     if (!apiKey) return preset ?? null;
 
+    // Dedupe concurrent callers racing to get/refresh a token at the same
+    // time — e.g. two products looked up in parallel right at ingest start,
+    // before any token is cached. Found live: each used to fire its own
+    // auth request with no pacing at all, so two near-simultaneous calls
+    // blew straight past CJ's own "1 request/second" limit ("CJ auth
+    // failed: Too Many Requests, QPS limit is 1 time/1second").
+    if (this.authInFlight) return this.authInFlight;
+    this.authInFlight = this.doAuth(apiKey).finally(() => {
+      this.authInFlight = null;
+    });
+    return this.authInFlight;
+  }
+
+  /** The actual auth/refresh call — paced like every other CJ request, never throws. */
+  private async doAuth(apiKey: string): Promise<string | null> {
     const tryAuth = async (path: string, body: Record<string, string>) => {
-      const res = await fetch(`${CJ_BASE}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+      const res = await this.paced(() =>
+        fetch(`${CJ_BASE}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(15_000),
+        }),
+      );
       const json = (await res.json()) as CjEnvelope<{
         accessToken?: string;
         refreshToken?: string;

@@ -38,3 +38,25 @@ export const BIG_BRANDS = wordBoundary(BRAND_ALTERNATION);
 export function isLikelyBranded(title: string): boolean {
   return BIG_BRANDS.test(title ?? '');
 }
+
+/**
+ * Plain-word form of the same denylist, for PipiAds' own `exclude_word`
+ * request param (confirmed live against the real API: it does filter —
+ * excluding "Mixsoon" from a query removed every ad mentioning it from the
+ * response). PipiAds bills 1 credit per ad *returned*, so excluding known
+ * big-brand ads at the request itself means we stop paying to see — and
+ * then reject for free anyway — the same brand ads every run. Keep this in
+ * sync with `BRAND_ALTERNATION` above by hand; it's a flat keyword list, not
+ * a regex, so it can't be derived from it automatically.
+ */
+export const BIG_BRAND_WORDS = [
+  'apple', 'samsung', 'sony', 'nike', 'adidas', 'dyson', 'lego', 'microsoft', 'bose', 'canon',
+  'nikon', 'hp', 'dell', 'lenovo', 'asus', 'macbook', 'iphone', 'ipad', 'google', 'philips',
+  'braun', 'oral-b', 'pampers', 'huggies', 'nestle', 'nestlé', 'coca-cola', 'pepsi', 'lays',
+  'kellogg', 'danone', 'nivea', 'loreal', "l'oréal", 'gillette', 'duracell', 'energizer',
+  'xiaomi', 'huawei', 'oneplus', 'oppo', 'vivo', 'realme', 'garmin', 'fitbit', 'jbl', 'beats',
+  'logitech', 'razer', 'xbox', 'playstation', 'nintendo', 'playmobil', 'hasbro', 'mattel',
+  'fisher-price', 'shark', 'irobot', 'roomba', 'ninja', 'kitchenaid', 'tefal', 'moulinex',
+  'bosch', 'siemens', 'whirlpool', 'vorwerk', 'thermomix', 'medicube', 'olaplex', 'samsonite',
+  'thule', 'michelin', 'kong',
+];

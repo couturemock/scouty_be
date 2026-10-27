@@ -43,6 +43,18 @@ const ENTERTAINMENT = wordBoundary(
   'album|vinyl|vinilo|world\\s+tour|concert|concierto|tickets?|entradas|pre[- ]?order\\s+now|merch|movie|pel[ií]cula|streaming|podcast|webinar|course|curso|masterclass|ebook',
 );
 
+/**
+ * Plain-word form of the same list, for PipiAds' `exclude_word` request
+ * param — same reasoning as `BIG_BRAND_WORDS`: stop paying the 1-credit
+ * list fee for ads we were going to reject for free anyway. Keep in sync
+ * with `ENTERTAINMENT` above by hand (it's a flat list, not derived from
+ * the regex).
+ */
+export const ENTERTAINMENT_WORDS = [
+  'album', 'vinyl', 'vinilo', 'concert', 'concierto', 'tickets', 'entradas', 'merch', 'movie',
+  'película', 'streaming', 'podcast', 'webinar', 'course', 'curso', 'masterclass', 'ebook',
+];
+
 const SPONSORED_CREATOR =
   /#(?:ad|sponsored|partner|nativepartner|publicidad|patrocinado)\b|sponsoredby|discount\s+code|c[oó]digo\s+de\s+descuento/i;
 
