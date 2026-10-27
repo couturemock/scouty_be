@@ -173,4 +173,22 @@ describe('SuppliersService.findRelated', () => {
     expect(validator.filterSameProduct).not.toHaveBeenCalled();
     expect(offers.every((o) => o.kind === 'estimated')).toBe(true);
   });
+
+  it('passes opts.aiTags through to the match validator as extra context', async () => {
+    // Real bug found live: a bare, vague title (e.g. "THE DAILY", a dog
+    // supplement per its PipiAds tags) gave the match validator nothing to
+    // tell a real product apart from an unrelated one sharing a generic
+    // word — the tags carry the context the title alone doesn't.
+    const validator = matchValidator();
+    const service = new SuppliersService(aliexpress([]), cj([liveCjOffer]), aiSupplier(null), validator);
+    await service.findRelated('Posture Corrector Brace', 6, 29, 'ES', null, {
+      skipAiFallback: true,
+      aiTags: ['#dogsupplement', '#petmultivitamin'],
+    });
+    expect(validator.filterSameProduct).toHaveBeenCalledWith(
+      'Posture Corrector Brace',
+      expect.any(Array),
+      ['#dogsupplement', '#petmultivitamin'],
+    );
+  });
 });

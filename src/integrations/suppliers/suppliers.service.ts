@@ -91,7 +91,7 @@ export class SuppliersService {
     salePriceEur?: number,
     market = 'ES',
     imageUrl?: string | null,
-    opts?: { skipAiFallback?: boolean },
+    opts?: { skipAiFallback?: boolean; aiTags?: string[] },
   ): Promise<SupplierOffer[]> {
     const take = Math.min(Math.max(limit, 1), 9);
     const perSource = Math.max(3, Math.ceil(take / 2) + 1);
@@ -142,7 +142,11 @@ export class SuppliersService {
     // each live offer is really the same product before showing it.
     const liveOffers = merged.filter((o) => o.kind === 'live');
     if (liveOffers.length) {
-      const confirmed = await this.matchValidator.filterSameProduct(productTitle, liveOffers);
+      const confirmed = await this.matchValidator.filterSameProduct(
+        productTitle,
+        liveOffers,
+        opts?.aiTags,
+      );
       const keep = new Set(confirmed.map((o) => o.listingUrl));
       const rejected = liveOffers.length - confirmed.length;
       if (rejected > 0) {

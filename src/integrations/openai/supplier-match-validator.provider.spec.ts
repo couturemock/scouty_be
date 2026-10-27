@@ -76,4 +76,26 @@ describe('SupplierMatchValidatorProvider', () => {
     const result = await provider.filterSameProduct('Posture Corrector Brace', offers);
     expect(result).toEqual(offers);
   });
+
+  it('sends aiTags as extra context when provided', async () => {
+    // Real bug found live: "THE DAILY" (a dog supplement per its PipiAds
+    // tags) got matched to "Silicone Daily Necessitiesr" — same generic
+    // word "Daily", nothing else in common — because the bare title gave
+    // the model nothing to tell them apart. Tags should reach the prompt.
+    const completeJson = jest.fn().mockResolvedValue({ items: [] });
+    const provider = new SupplierMatchValidatorProvider(client({ completeJson }), config());
+    await provider.filterSameProduct('THE DAILY', offers, ['#dogsupplement', '#petmultivitamin']);
+
+    const sentPayload = JSON.parse(completeJson.mock.calls[0]![0].user);
+    expect(sentPayload.tags).toEqual(['#dogsupplement', '#petmultivitamin']);
+  });
+
+  it('omits tags from the payload when none are given', async () => {
+    const completeJson = jest.fn().mockResolvedValue({ items: [] });
+    const provider = new SupplierMatchValidatorProvider(client({ completeJson }), config());
+    await provider.filterSameProduct('Posture Corrector Brace', offers);
+
+    const sentPayload = JSON.parse(completeJson.mock.calls[0]![0].user);
+    expect(sentPayload.tags).toBeUndefined();
+  });
 });

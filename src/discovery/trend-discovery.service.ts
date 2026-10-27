@@ -680,7 +680,7 @@ export class TrendDiscoveryService {
             c.priceEur ?? undefined,
             market,
             c.imageUrl,
-            { skipAiFallback: true }, // batched separately below, not one AI call per product
+            { skipAiFallback: true, aiTags: c.aiTags }, // batched separately below, not one AI call per product
           );
           c.suppliers = offers.filter((o) => o.kind !== 'live' || offerIsSameProduct(o, c.title));
         } catch (err) {
