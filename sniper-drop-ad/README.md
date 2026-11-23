@@ -50,3 +50,21 @@ Las frases largas se subdividieron por micro-pausas (p. ej. tracción 53,1 s · 
 - Gráfica de tendencia de la escena 10: marcada "Ilustrativo".
 - Marca "NÓMADA" de la botella: ficticia.
 - Fuentes (TikTok Shop, Meta Ads, Shopify): texto neutro, sin logotipos de terceros.
+
+---
+
+# Anuncio 44 s — "El mapa del tesoro" (composición `SniperDrop44`)
+
+```bash
+npx remotion render SniperDrop44 out/sniper-drop-44s.mp4 --codec=h264 --crf=16
+```
+
+- Escenas en `src/ad44/scenes/A1…A8`, componentes nuevos en `src/ad44/components44.tsx`
+  (portátil 2.5D, navegador, portada real de sniperdrop.com, logos de plataformas, gráfica, creativos).
+- **Sincronización PROVISIONAL**: no se recibió el audio. Los tiempos de `src/ad44/timeline44.ts` se
+  estimaron a partir del guion con el ritmo medido del mismo narrador (~7 sílabas/s).
+  Para sincronizar con el audio real: copia el archivo a `public/audio/narracion-44.m4a`,
+  pon `HAS_AUDIO = true` y ajusta los valores de `V` con los tiempos medidos.
+- Logos de TikTok Shop, Meta y Shopify: imágenes oficiales enviadas, sin modificar, en `public/platforms/`.
+- Portada de sniperdrop.com reconstruida sin el contador "Plazas completas 500/500".
+- Datos ilustrativos marcados en pantalla (gráficas, tiendas/anuncios de ejemplo, cálculo de margen).
