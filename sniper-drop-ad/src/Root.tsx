@@ -6,6 +6,8 @@ import { FPS, SCENES, SceneKey, TOTAL_FRAMES, sec } from "./timeline";
 import { H, W } from "./styles/theme";
 import { Scene44Preview, SCENES44_TITLES, SniperDrop44 } from "./ad44/SniperDrop44";
 import { SCENES44, Scene44, TOTAL_FRAMES as TOTAL44 } from "./ad44/timeline44";
+import { Scene49Preview, SCENES49_TITLES, SniperDrop49 } from "./ad49/SniperDrop49";
+import { SCENES49, Scene49, TOTAL_FRAMES as TOTAL49 } from "./ad49/timeline49";
 
 export const RemotionRoot: React.FC = () => (
   <>
@@ -35,6 +37,21 @@ export const RemotionRoot: React.FC = () => (
           height={H}
           fps={FPS}
           durationInFrames={Math.round((SCENES44[k][1] - SCENES44[k][0]) * FPS)}
+          defaultProps={{ scene: k }}
+        />
+      ))}
+    </Folder>
+    <Composition id="SniperDrop49" component={SniperDrop49} width={W} height={H} fps={FPS} durationInFrames={TOTAL49} />
+    <Folder name="Escenas-49s">
+      {(Object.keys(SCENES49) as Scene49[]).map((k) => (
+        <Composition
+          key={k}
+          id={SCENES49_TITLES[k]}
+          component={Scene49Preview}
+          width={W}
+          height={H}
+          fps={FPS}
+          durationInFrames={Math.round((SCENES49[k][1] - SCENES49[k][0]) * FPS)}
           defaultProps={{ scene: k }}
         />
       ))}

@@ -68,3 +68,18 @@ npx remotion render SniperDrop44 out/sniper-drop-44s.mp4 --codec=h264 --crf=16
 - Logos de TikTok Shop, Meta y Shopify: imágenes oficiales enviadas, sin modificar, en `public/platforms/`.
 - Portada de sniperdrop.com reconstruida sin el contador "Plazas completas 500/500".
 - Datos ilustrativos marcados en pantalla (gráficas, tiendas/anuncios de ejemplo, cálculo de margen).
+
+---
+
+# Anuncio 49,5 s — "Detecta productos antes de que se hagan virales" (composición `SniperDrop49`)
+
+```bash
+npx remotion render SniperDrop49 out/sniper-drop-49s.mp4 --codec=h264 --crf=16
+```
+
+- Audio: `public/audio/narracion-49.mp3` (49,476 s → 1485 fotogramas). Sin cola artificial.
+- Tiempos en `src/ad49/timeline49.ts`: límites de frase = pausas reales del audio; palabras repartidas por sílabas.
+- Escenas en `src/ad49/scenes/B01…B11`; componentes nuevos en `src/ad49/components49.tsx`
+  (móvil con feed vertical sin marca, productos, dormitorio nocturno 2.5D, línea temporal de semanas).
+- Ejemplos marcados en pantalla: semanas de investigación, antigüedad de anuncios (3/12/28 días),
+  costes de proveedores, cálculo de margen, actividad del panel nocturno, gráficas.
