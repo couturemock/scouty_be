@@ -1,7 +1,10 @@
 /**
  * Timeline locked to public/audio/narracion-49.mp3 (49.476 s).
- * Phrase boundaries = detected pauses (ffmpeg silencedetect); words inside a
- * phrase are distributed by syllables. Edit here to re-time the ad.
+ *
+ * Scenes are authored in the "design" time base below (W49 / SCENES49).
+ * WORD_ANCHORS maps each design time to the REAL word start measured with
+ * Whisper (word timestamps), so every key word lands on its exact frame.
+ * Between anchors the animation is stretched/compressed linearly.
  */
 export const FPS = 30;
 export const AUDIO = 49.476;
@@ -79,3 +82,71 @@ export const SCENES49 = {
   b11: [44.3, AUDIO], // while you sleep + brand close
 } as const;
 export type Scene49 = keyof typeof SCENES49;
+
+/** [design time, measured word start in the audio] — Whisper medium, word timestamps. */
+export const WORD_ANCHORS: [number, number][] = [
+  [0, 0],
+  [2.35, 1.9], // TikTok
+  [3.76, 4.0], // tienes un problema
+  [4.91, 5.04], // Probablemente
+  [5.95, 5.76], // llegando tarde
+  [6.74, 6.76], // El mercado
+  [7.95, 8.02], // rápido
+  [8.72, 8.74], // Cuando
+  [10.7, 10.04], // 20 veces
+  [11.95, 11.94], // hay gente
+  [13.2, 12.6], // semanas
+  [13.89, 13.06], // analizándolo
+  [15.0, 14.06], // testeándolo
+  [15.65, 14.78], // vendiéndolo
+  [16.67, 15.64], // La pregunta es
+  [18.07, 16.68], // ¿cómo lo encuentran antes?
+  [18.86, 18.02], // Y aquí entra
+  [19.25, 18.82], // Sniper Drop
+  [19.92, 20.0], // Esta bestia
+  [21.0, 21.18], // productos
+  [21.75, 21.96], // funcionando
+  [22.85, 23.34], // despegar
+  [23.91, 23.88], // Te enseña
+  [24.7, 24.62], // anuncios
+  [25.35, 25.26], // creativos
+  [26.5, 26.62], // señales
+  [27.25, 27.4], // dónde … dinero
+  [29.68, 29.4], // cuánto tiempo
+  [32.17, 31.32], // y además
+  [34.0, 32.68], // proveedores
+  [34.89, 33.68], // precios
+  [35.85, 34.2], // márgenes
+  [36.84, 34.94], // Y lo más bestia
+  [38.1, 37.6], // sistema
+  [39.3, 38.2], // cuatro motores
+  [40.3, 39.32], // rastreando
+  [41.03, 39.94], // 24/7
+  [41.9, 40.92], // TikTok Shop
+  [42.7, 42.08], // Meta Ads
+  [43.25, 42.84], // Shopify
+  [43.6, 43.54], // otras fuentes
+  [44.4, 44.5], // Mientras tú duermes
+  [45.48, 45.72], // Sniper Drop sigue analizando
+  [46.6, 47.04], // miles
+  [48.2, 48.4], // buscando señales
+  [49.09, 49.3], // end of speech
+  [AUDIO, AUDIO],
+];
+
+const interp = (x: number, a: number, b: number) => {
+  const pts = WORD_ANCHORS;
+  if (x <= pts[0][a]) return pts[0][b] + (x - pts[0][a]);
+  for (let i = 1; i < pts.length; i++) {
+    if (x <= pts[i][a]) {
+      const k = (x - pts[i - 1][a]) / (pts[i][a] - pts[i - 1][a]);
+      return pts[i - 1][b] + k * (pts[i][b] - pts[i - 1][b]);
+    }
+  }
+  const last = pts[pts.length - 1];
+  return last[b] + (x - last[a]);
+};
+/** design time → real audio time */
+export const toReal = (t: number) => interp(t, 0, 1);
+/** real audio time → design time */
+export const toDesign = (t: number) => interp(t, 1, 0);

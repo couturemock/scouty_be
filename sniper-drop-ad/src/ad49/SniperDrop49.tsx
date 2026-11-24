@@ -3,7 +3,7 @@ import { AbsoluteFill, Sequence, staticFile } from "remotion";
 import { Audio } from "@remotion/media";
 import { SceneClock } from "../animations/clock";
 import { C } from "../styles/theme";
-import { FPS, SCENES49, Scene49 } from "./timeline49";
+import { FPS, SCENES49, Scene49, toDesign, toReal } from "./timeline49";
 import { B01Feed } from "./scenes/B01Feed";
 import { B02Market } from "./scenes/B02Market";
 import { B03Weeks } from "./scenes/B03Weeks";
@@ -49,11 +49,12 @@ const f = (s: number) => Math.round(s * FPS);
 export const SniperDrop49: React.FC = () => (
   <AbsoluteFill style={{ background: C.ink }}>
     {(Object.keys(SCENES49) as Scene49[]).map((k) => {
-      const [a, b] = SCENES49[k];
+      const a = toReal(SCENES49[k][0]);
+      const b = toReal(SCENES49[k][1]);
       const Comp = SCENES49_COMPONENTS[k];
       return (
         <Sequence key={k} name={SCENES49_TITLES[k]} from={f(a)} durationInFrames={f(b) - f(a) + 1} premountFor={30}>
-          <SceneClock start={f(a) / FPS}>
+          <SceneClock start={f(a) / FPS} map={toDesign}>
             <Comp />
           </SceneClock>
         </Sequence>
@@ -67,10 +68,10 @@ export const Scene49Preview: React.FC<{ scene: Scene49 }> = ({ scene }) => {
   const Comp = SCENES49_COMPONENTS[scene];
   return (
     <AbsoluteFill style={{ background: C.ink }}>
-      <SceneClock start={f(SCENES49[scene][0]) / FPS}>
+      <SceneClock start={f(toReal(SCENES49[scene][0])) / FPS} map={toDesign}>
         <Comp />
       </SceneClock>
-      <Audio src={staticFile("audio/narracion-49.mp3")} trimBefore={f(SCENES49[scene][0])} />
+      <Audio src={staticFile("audio/narracion-49.mp3")} trimBefore={f(toReal(SCENES49[scene][0]))} />
     </AbsoluteFill>
   );
 };

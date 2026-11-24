@@ -1,0 +1,780 @@
+[
+ {
+  "start": 0.0,
+  "end": 4.78,
+  "text": " Si todavía buscas productos virales en TikTok para decidir qué vender, tienes un problema.",
+  "words": [
+   {
+    "w": " Si",
+    "s": 0.0,
+    "e": 0.22
+   },
+   {
+    "w": " todavía",
+    "s": 0.22,
+    "e": 0.58
+   },
+   {
+    "w": " buscas",
+    "s": 0.58,
+    "e": 0.92
+   },
+   {
+    "w": " productos",
+    "s": 0.92,
+    "e": 1.4
+   },
+   {
+    "w": " virales",
+    "s": 1.4,
+    "e": 1.76
+   },
+   {
+    "w": " en",
+    "s": 1.76,
+    "e": 1.9
+   },
+   {
+    "w": " TikTok",
+    "s": 1.9,
+    "e": 2.22
+   },
+   {
+    "w": " para",
+    "s": 2.22,
+    "e": 2.54
+   },
+   {
+    "w": " decidir",
+    "s": 2.54,
+    "e": 2.98
+   },
+   {
+    "w": " qué",
+    "s": 2.98,
+    "e": 3.14
+   },
+   {
+    "w": " vender,",
+    "s": 3.14,
+    "e": 3.48
+   },
+   {
+    "w": " tienes",
+    "s": 4.0,
+    "e": 4.06
+   },
+   {
+    "w": " un",
+    "s": 4.06,
+    "e": 4.34
+   },
+   {
+    "w": " problema.",
+    "s": 4.34,
+    "e": 4.78
+   }
+  ]
+ },
+ {
+  "start": 5.04,
+  "end": 8.44,
+  "text": " Probablemente estás llegando tarde. El mercado va demasiado rápido.",
+  "words": [
+   {
+    "w": " Probablemente",
+    "s": 5.04,
+    "e": 5.6
+   },
+   {
+    "w": " estás",
+    "s": 5.6,
+    "e": 5.76
+   },
+   {
+    "w": " llegando",
+    "s": 5.76,
+    "e": 6.16
+   },
+   {
+    "w": " tarde.",
+    "s": 6.16,
+    "e": 6.48
+   },
+   {
+    "w": " El",
+    "s": 6.76,
+    "e": 6.9
+   },
+   {
+    "w": " mercado",
+    "s": 6.9,
+    "e": 7.26
+   },
+   {
+    "w": " va",
+    "s": 7.26,
+    "e": 7.46
+   },
+   {
+    "w": " demasiado",
+    "s": 7.46,
+    "e": 8.02
+   },
+   {
+    "w": " rápido.",
+    "s": 8.02,
+    "e": 8.44
+   }
+  ]
+ },
+ {
+  "start": 8.74,
+  "end": 11.58,
+  "text": " Cuando un producto ya te aparece 20 veces al día en TikTok,",
+  "words": [
+   {
+    "w": " Cuando",
+    "s": 8.74,
+    "e": 8.94
+   },
+   {
+    "w": " un",
+    "s": 8.94,
+    "e": 9.14
+   },
+   {
+    "w": " producto",
+    "s": 9.14,
+    "e": 9.44
+   },
+   {
+    "w": " ya",
+    "s": 9.44,
+    "e": 9.6
+   },
+   {
+    "w": " te",
+    "s": 9.6,
+    "e": 9.8
+   },
+   {
+    "w": " aparece",
+    "s": 9.8,
+    "e": 10.04
+   },
+   {
+    "w": " 20",
+    "s": 10.04,
+    "e": 10.4
+   },
+   {
+    "w": " veces",
+    "s": 10.4,
+    "e": 10.7
+   },
+   {
+    "w": " al",
+    "s": 10.7,
+    "e": 10.9
+   },
+   {
+    "w": " día",
+    "s": 10.9,
+    "e": 11.02
+   },
+   {
+    "w": " en",
+    "s": 11.02,
+    "e": 11.12
+   },
+   {
+    "w": " TikTok,",
+    "s": 11.12,
+    "e": 11.58
+   }
+  ]
+ },
+ {
+  "start": 11.94,
+  "end": 15.38,
+  "text": " hay gente que lleva semanas analizándolo, testeándolo y vendiéndolo.",
+  "words": [
+   {
+    "w": " hay",
+    "s": 11.94,
+    "e": 12.0
+   },
+   {
+    "w": " gente",
+    "s": 12.0,
+    "e": 12.22
+   },
+   {
+    "w": " que",
+    "s": 12.22,
+    "e": 12.4
+   },
+   {
+    "w": " lleva",
+    "s": 12.4,
+    "e": 12.6
+   },
+   {
+    "w": " semanas",
+    "s": 12.6,
+    "e": 13.06
+   },
+   {
+    "w": " analizándolo,",
+    "s": 13.06,
+    "e": 13.84
+   },
+   {
+    "w": " testeándolo",
+    "s": 14.06,
+    "e": 14.6
+   },
+   {
+    "w": " y",
+    "s": 14.6,
+    "e": 14.78
+   },
+   {
+    "w": " vendiéndolo.",
+    "s": 14.78,
+    "e": 15.38
+   }
+  ]
+ },
+ {
+  "start": 15.64,
+  "end": 17.84,
+  "text": " La pregunta es, ¿cómo lo encuentran antes?",
+  "words": [
+   {
+    "w": " La",
+    "s": 15.64,
+    "e": 15.76
+   },
+   {
+    "w": " pregunta",
+    "s": 15.76,
+    "e": 16.12
+   },
+   {
+    "w": " es,",
+    "s": 16.12,
+    "e": 16.58
+   },
+   {
+    "w": " ¿cómo",
+    "s": 16.68,
+    "e": 16.86
+   },
+   {
+    "w": " lo",
+    "s": 16.86,
+    "e": 17.12
+   },
+   {
+    "w": " encuentran",
+    "s": 17.12,
+    "e": 17.44
+   },
+   {
+    "w": " antes?",
+    "s": 17.44,
+    "e": 17.84
+   }
+  ]
+ },
+ {
+  "start": 18.02,
+  "end": 19.7,
+  "text": " Y aquí entra SniperDrop.",
+  "words": [
+   {
+    "w": " Y",
+    "s": 18.02,
+    "e": 18.28
+   },
+   {
+    "w": " aquí",
+    "s": 18.28,
+    "e": 18.48
+   },
+   {
+    "w": " entra",
+    "s": 18.48,
+    "e": 18.82
+   },
+   {
+    "w": " SniperDrop.",
+    "s": 18.82,
+    "e": 19.7
+   }
+  ]
+ },
+ {
+  "start": 20.0,
+  "end": 23.74,
+  "text": " Esta bestia busca por ti productos que están funcionando o empezando a despegar.",
+  "words": [
+   {
+    "w": " Esta",
+    "s": 20.0,
+    "e": 20.2
+   },
+   {
+    "w": " bestia",
+    "s": 20.2,
+    "e": 20.54
+   },
+   {
+    "w": " busca",
+    "s": 20.54,
+    "e": 20.8
+   },
+   {
+    "w": " por",
+    "s": 20.8,
+    "e": 20.96
+   },
+   {
+    "w": " ti",
+    "s": 20.96,
+    "e": 21.18
+   },
+   {
+    "w": " productos",
+    "s": 21.18,
+    "e": 21.54
+   },
+   {
+    "w": " que",
+    "s": 21.54,
+    "e": 21.78
+   },
+   {
+    "w": " están",
+    "s": 21.78,
+    "e": 21.96
+   },
+   {
+    "w": " funcionando",
+    "s": 21.96,
+    "e": 22.58
+   },
+   {
+    "w": " o",
+    "s": 22.58,
+    "e": 22.78
+   },
+   {
+    "w": " empezando",
+    "s": 22.78,
+    "e": 23.2
+   },
+   {
+    "w": " a",
+    "s": 23.2,
+    "e": 23.34
+   },
+   {
+    "w": " despegar.",
+    "s": 23.34,
+    "e": 23.74
+   }
+  ]
+ },
+ {
+  "start": 23.88,
+  "end": 27.24,
+  "text": " Te enseña qué anuncios y creativos están teniendo mejores señales,",
+  "words": [
+   {
+    "w": " Te",
+    "s": 23.88,
+    "e": 24.12
+   },
+   {
+    "w": " enseña",
+    "s": 24.12,
+    "e": 24.38
+   },
+   {
+    "w": " qué",
+    "s": 24.38,
+    "e": 24.62
+   },
+   {
+    "w": " anuncios",
+    "s": 24.62,
+    "e": 25.04
+   },
+   {
+    "w": " y",
+    "s": 25.04,
+    "e": 25.26
+   },
+   {
+    "w": " creativos",
+    "s": 25.26,
+    "e": 25.56
+   },
+   {
+    "w": " están",
+    "s": 25.56,
+    "e": 25.86
+   },
+   {
+    "w": " teniendo",
+    "s": 25.86,
+    "e": 26.26
+   },
+   {
+    "w": " mejores",
+    "s": 26.26,
+    "e": 26.62
+   },
+   {
+    "w": " señales,",
+    "s": 26.62,
+    "e": 27.24
+   }
+  ]
+ },
+ {
+  "start": 27.4,
+  "end": 29.4,
+  "text": " dónde otros vendedores están metiendo dinero,",
+  "words": [
+   {
+    "w": " dónde",
+    "s": 27.4,
+    "e": 27.64
+   },
+   {
+    "w": " otros",
+    "s": 27.64,
+    "e": 27.9
+   },
+   {
+    "w": " vendedores",
+    "s": 27.9,
+    "e": 28.42
+   },
+   {
+    "w": " están",
+    "s": 28.42,
+    "e": 28.68
+   },
+   {
+    "w": " metiendo",
+    "s": 28.68,
+    "e": 29.04
+   },
+   {
+    "w": " dinero,",
+    "s": 29.04,
+    "e": 29.4
+   }
+  ]
+ },
+ {
+  "start": 29.4,
+  "end": 34.62,
+  "text": " cuánto tiempo llevan anunciándose y, además, te encuentra proveedores, precios y márgenes.",
+  "words": [
+   {
+    "w": " cuánto",
+    "s": 29.4,
+    "e": 30.1
+   },
+   {
+    "w": " tiempo",
+    "s": 30.1,
+    "e": 30.36
+   },
+   {
+    "w": " llevan",
+    "s": 30.36,
+    "e": 30.68
+   },
+   {
+    "w": " anunciándose",
+    "s": 30.68,
+    "e": 31.32
+   },
+   {
+    "w": " y,",
+    "s": 31.32,
+    "e": 31.66
+   },
+   {
+    "w": " además,",
+    "s": 31.66,
+    "e": 31.96
+   },
+   {
+    "w": " te",
+    "s": 32.16,
+    "e": 32.36
+   },
+   {
+    "w": " encuentra",
+    "s": 32.36,
+    "e": 32.68
+   },
+   {
+    "w": " proveedores,",
+    "s": 32.68,
+    "e": 33.42
+   },
+   {
+    "w": " precios",
+    "s": 33.68,
+    "e": 33.94
+   },
+   {
+    "w": " y",
+    "s": 33.94,
+    "e": 34.2
+   },
+   {
+    "w": " márgenes.",
+    "s": 34.2,
+    "e": 34.62
+   }
+  ]
+ },
+ {
+  "start": 34.94,
+  "end": 36.6,
+  "text": " Y lo más bestia es cómo lo hace.",
+  "words": [
+   {
+    "w": " Y",
+    "s": 34.94,
+    "e": 35.04
+   },
+   {
+    "w": " lo",
+    "s": 35.04,
+    "e": 35.16
+   },
+   {
+    "w": " más",
+    "s": 35.16,
+    "e": 35.34
+   },
+   {
+    "w": " bestia",
+    "s": 35.34,
+    "e": 35.68
+   },
+   {
+    "w": " es",
+    "s": 35.68,
+    "e": 35.92
+   },
+   {
+    "w": " cómo",
+    "s": 35.92,
+    "e": 36.16
+   },
+   {
+    "w": " lo",
+    "s": 36.16,
+    "e": 36.42
+   },
+   {
+    "w": " hace.",
+    "s": 36.42,
+    "e": 36.6
+   }
+  ]
+ },
+ {
+  "start": 36.84,
+  "end": 41.72,
+  "text": " Tienen su propio sistema con cuatro motores de IA rastreando 24-7 TikTok Shop,",
+  "words": [
+   {
+    "w": " Tienen",
+    "s": 36.84,
+    "e": 37.14
+   },
+   {
+    "w": " su",
+    "s": 37.14,
+    "e": 37.36
+   },
+   {
+    "w": " propio",
+    "s": 37.36,
+    "e": 37.6
+   },
+   {
+    "w": " sistema",
+    "s": 37.6,
+    "e": 37.96
+   },
+   {
+    "w": " con",
+    "s": 37.96,
+    "e": 38.2
+   },
+   {
+    "w": " cuatro",
+    "s": 38.2,
+    "e": 38.54
+   },
+   {
+    "w": " motores",
+    "s": 38.54,
+    "e": 38.92
+   },
+   {
+    "w": " de",
+    "s": 38.92,
+    "e": 39.1
+   },
+   {
+    "w": " IA",
+    "s": 39.1,
+    "e": 39.32
+   },
+   {
+    "w": " rastreando",
+    "s": 39.32,
+    "e": 39.94
+   },
+   {
+    "w": " 24",
+    "s": 39.94,
+    "e": 40.46
+   },
+   {
+    "w": "-7",
+    "s": 40.46,
+    "e": 40.92
+   },
+   {
+    "w": " TikTok",
+    "s": 40.92,
+    "e": 41.38
+   },
+   {
+    "w": " Shop,",
+    "s": 41.38,
+    "e": 41.72
+   }
+  ]
+ },
+ {
+  "start": 42.08,
+  "end": 44.3,
+  "text": " MetaAds, Shopify y otras fuentes.",
+  "words": [
+   {
+    "w": " MetaAds,",
+    "s": 42.08,
+    "e": 42.64
+   },
+   {
+    "w": " Shopify",
+    "s": 42.84,
+    "e": 43.14
+   },
+   {
+    "w": " y",
+    "s": 43.14,
+    "e": 43.54
+   },
+   {
+    "w": " otras",
+    "s": 43.54,
+    "e": 43.74
+   },
+   {
+    "w": " fuentes.",
+    "s": 43.74,
+    "e": 44.3
+   }
+  ]
+ },
+ {
+  "start": 44.5,
+  "end": 49.3,
+  "text": " Mientras tú duermes, SniperDrop sigue analizando miles de productos y anuncios buscando señales.",
+  "words": [
+   {
+    "w": " Mientras",
+    "s": 44.5,
+    "e": 44.74
+   },
+   {
+    "w": " tú",
+    "s": 44.74,
+    "e": 44.96
+   },
+   {
+    "w": " duermes,",
+    "s": 44.96,
+    "e": 45.48
+   },
+   {
+    "w": " SniperDrop",
+    "s": 45.72,
+    "e": 46.14
+   },
+   {
+    "w": " sigue",
+    "s": 46.14,
+    "e": 46.42
+   },
+   {
+    "w": " analizando",
+    "s": 46.42,
+    "e": 47.04
+   },
+   {
+    "w": " miles",
+    "s": 47.04,
+    "e": 47.3
+   },
+   {
+    "w": " de",
+    "s": 47.3,
+    "e": 47.6
+   },
+   {
+    "w": " productos",
+    "s": 47.6,
+    "e": 47.86
+   },
+   {
+    "w": " y",
+    "s": 47.86,
+    "e": 48.06
+   },
+   {
+    "w": " anuncios",
+    "s": 48.06,
+    "e": 48.4
+   },
+   {
+    "w": " buscando",
+    "s": 48.4,
+    "e": 48.84
+   },
+   {
+    "w": " señales.",
+    "s": 48.84,
+    "e": 49.3
+   }
+  ]
+ }
+]

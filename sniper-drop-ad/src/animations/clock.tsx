@@ -7,18 +7,24 @@ import { FPS } from "../timeline";
  * keyed directly to the words of the voice-over. The provider tells the scene
  * at which absolute second its <Sequence> starts.
  */
-const OffsetCtx = createContext(0);
+const OffsetCtx = createContext<{ start: number; map?: (t: number) => number }>({ start: 0 });
 
-export const SceneClock: React.FC<{ start: number; children: React.ReactNode }> = ({
+/**
+ * `map` (optional) converts real audio time into the time base the scene was
+ * authored in. Used to lock a scene to measured word timestamps.
+ */
+export const SceneClock: React.FC<{ start: number; map?: (t: number) => number; children: React.ReactNode }> = ({
   start,
+  map,
   children,
-}) => <OffsetCtx.Provider value={start}>{children}</OffsetCtx.Provider>;
+}) => <OffsetCtx.Provider value={{ start, map }}>{children}</OffsetCtx.Provider>;
 
 /** Absolute time in seconds (narration time). */
 export const useTime = () => {
   const frame = useCurrentFrame();
-  const offset = useContext(OffsetCtx);
-  return offset + frame / FPS;
+  const { start, map } = useContext(OffsetCtx);
+  const t = start + frame / FPS;
+  return map ? map(t) : t;
 };
 
 // ---- easing library -------------------------------------------------------
