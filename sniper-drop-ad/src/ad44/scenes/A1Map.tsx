@@ -2,8 +2,9 @@ import React from "react";
 import { AbsoluteFill } from "remotion";
 import { E, mix, p, spr, tw, useTime } from "../../animations/clock";
 import { DarkBg, RiseText } from "../../components/primitives";
-import { Box3D, Earbuds } from "../../components/product/Products";
-import { AdCreative, ProductPhoto } from "../components44";
+import { Box3D } from "../../components/product/Products";
+import { AdCreative } from "../components44";
+import { Chopper, DogBottle, ProductTile44 } from "../products44";
 import { C, INTER, SORA } from "../../styles/theme";
 import { V } from "../timeline44";
 
@@ -49,7 +50,7 @@ const MiniStore: React.FC = () => (
       <div style={{ flex: 1, height: 16, borderRadius: 6, background: "#fff", marginLeft: 8 }} />
     </div>
     <div style={{ padding: 16, display: "flex", gap: 14, alignItems: "center" }}>
-      <ProductPhoto size={120} style={{ boxShadow: "none", border: "1px solid #E3E7EF" }} />
+      <ProductTile44 kind="chopper" size={120} style={{ border: "1px solid #E3E7EF" }} />
       <div>
         <div style={{ fontSize: 17, color: C.studioMuted }}>Tienda online</div>
         <div style={{ fontFamily: SORA, fontWeight: 700, fontSize: 32, color: C.studioInk, marginTop: 4 }}>29,99 €</div>
@@ -61,7 +62,10 @@ const MiniStore: React.FC = () => (
 
 export const A1Map: React.FC = () => {
   const t = useTime();
-  const objIn = [spr(t, 0.1, 7, 0.6), spr(t, 0.3, 7, 0.6), spr(t, V.ecommerce - 0.15, 7, 0.6), spr(t, V.ecommerce, 7, 0.6)];
+  // opening demo: the hand presses the chopper lid on frame 1, dice fall into the container
+  const press = Math.min(1, 0.12 + p(t, 0, 0.55, E.inOut) * 0.88);
+  const dice = p(t, 0.5, 1.0, E.in);
+  const objIn = [spr(t, 2.35, 8, 0.6), 1, spr(t, 2.45, 8, 0.6), spr(t, 2.55, 8, 0.6)];
   const toMap = p(t, 2.45, 0.9, E.inOut); // objects condense into nodes
   const lines = p(t, 2.75, 0.8, E.inOut);
   const extraIn = EXTRA.map((_, i) => p(t, 2.7 + i * 0.06, 0.45));
@@ -73,9 +77,9 @@ export const A1Map: React.FC = () => {
 
   const objects = [
     <MiniStore key="s" />,
-    <Earbuds key="e" size={330} lid={1} />,
+    <Chopper key="e" size={860} press={press} dice={dice} hand={toMap < 0.6} />,
     <Box3D key="b" w={230} h={190} d={210} rx={-18} ry={-32 + t * 12} variant="kraft" />,
-    <AdCreative key="a" width={210} hook="Lo que todos están comprando" hue={225} product={<ProductPhoto size={120} />} />,
+    <AdCreative key="a" width={210} hook="Lo que todos están comprando" hue={225} product={<DogBottle height={160} bowl={0.7} level={0.6} />} />,
   ];
 
   return (
@@ -132,6 +136,9 @@ export const A1Map: React.FC = () => {
         ) : null}
       </svg>
 
+      {/* studio light behind the opening demo */}
+      <div style={{ position: "absolute", left: 540 - 520, top: 1010 - 520, width: 1040, height: 1040, borderRadius: 999, background: "radial-gradient(circle, rgba(236,240,248,0.95) 0%, rgba(214,222,238,0.75) 45%, rgba(214,222,238,0) 70%)", opacity: 1 - toMap, scale: mix(1, 0.3, toMap) }} />
+
       {/* small market-signal nodes */}
       {EXTRA.map((n, i) => (
         <div key={i} style={{ position: "absolute", left: n.x - 15, top: n.y - 15, width: 30, height: 30, borderRadius: 99, background: "#141A2C", border: "3px solid #5B7BFF", scale: extraIn[i], boxShadow: "0 0 18px rgba(91,123,255,0.6)" }} />
@@ -141,8 +148,12 @@ export const A1Map: React.FC = () => {
       {objects.map((o, i) => {
         const k = objIn[i];
         const n = NODES[i];
+        const demo = i === 1;
+        const x = demo ? mix(540, n.x, toMap) : n.x;
+        const y = demo ? mix(1010, n.y, toMap) : n.y + floatY(i);
+        const sc = demo ? mix(1, 0.27, toMap) : 0.42 * Math.min(1, k);
         return (
-          <div key={i} style={{ position: "absolute", left: n.x, top: n.y + floatY(i), translate: "-50% -50%", scale: mix(1, 0.42, toMap) * Math.min(1, k), opacity: Math.min(1, k * 2), rotate: `${mix([-6, 5, -4, 6][i], 0, toMap)}deg`, zIndex: 2 }}>
+          <div key={i} style={{ position: "absolute", left: x, top: y, translate: "-50% -50%", scale: sc, opacity: demo ? 1 : Math.min(1, k * 2), rotate: `${demo ? 0 : mix([-6, 5, -4, 6][i], 0, toMap)}deg`, zIndex: demo ? 4 : 2 }}>
             <div style={{ borderRadius: 40, boxShadow: toMap > 0.5 ? "0 0 0 10px rgba(91,123,255,0.35)" : undefined }}>{o}</div>
           </div>
         );

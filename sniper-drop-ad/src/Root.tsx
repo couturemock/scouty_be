@@ -6,6 +6,7 @@ import { FPS, SCENES, SceneKey, TOTAL_FRAMES, sec } from "./timeline";
 import { H, W } from "./styles/theme";
 import { Scene44Preview, SCENES44_TITLES, SniperDrop44 } from "./ad44/SniperDrop44";
 import { SCENES44, Scene44, TOTAL_FRAMES as TOTAL44 } from "./ad44/timeline44";
+import { ProductsQA } from "./ad44/ProductsQA";
 import { Scene49Preview, SCENES49_TITLES, SniperDrop49 } from "./ad49/SniperDrop49";
 import { SCENES49, Scene49, TOTAL_FRAMES as TOTAL49 } from "./ad49/timeline49";
 
@@ -25,6 +26,9 @@ export const RemotionRoot: React.FC = () => (
           defaultProps={{ scene: k }}
         />
       ))}
+    </Folder>
+    <Folder name="QA">
+      <Composition id="QA-Productos44" component={ProductsQA} width={W} height={H} fps={FPS} durationInFrames={1} />
     </Folder>
     <Composition id="SniperDrop44" component={SniperDrop44} width={W} height={H} fps={FPS} durationInFrames={TOTAL44} />
     <Folder name="Escenas-44s">

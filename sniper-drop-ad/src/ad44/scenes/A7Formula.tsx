@@ -3,7 +3,7 @@ import { AbsoluteFill } from "remotion";
 import { E, eur, mix, p, spr, useTime } from "../../animations/clock";
 import { DarkBg, DemoTag, Eyebrow } from "../../components/primitives";
 import { IFactory } from "../../components/Icons";
-import { Bottle } from "../../components/product/Products";
+import { DogBottle } from "../products44";
 import { CALC, calcMargin } from "../../components/ui/DropSniperUI";
 import { AdCreative } from "../components44";
 import { C, INTER, SORA } from "../../styles/theme";
@@ -62,11 +62,11 @@ export const A7Formula: React.FC = () => {
         const node = MERGE_NODES[i];
         const visual =
           i === 0 ? (
-            <Bottle height={220} angle={Math.sin(t * 1.4) * 40} brand={1} shadow={false} />
+            <DogBottle height={230} bowl={0.7} level={0.6} t={t} />
           ) : i === 1 ? (
             <IFactory size={130} color={C.blueBright} stroke={1.5} />
           ) : (
-            <AdCreative width={124} hook="Creativo destacado" hue={225} highlight={1} product={<div style={{ scale: 0.45 }}><Bottle height={200} brand={1} shadow={false} /></div>} />
+            <AdCreative width={124} hook="Creativo destacado" hue={225} highlight={1} product={<div style={{ background: "rgba(255,255,255,0.92)", borderRadius: 14, padding: 4 }}><DogBottle height={90} bowl={0.7} level={0.6} /></div>} />
           );
         return (
           <div

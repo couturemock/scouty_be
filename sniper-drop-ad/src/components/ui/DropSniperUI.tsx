@@ -235,11 +235,14 @@ export const RANKING_ROWS = [
   { price: "23,00 €", bsr: "BSR 9", sales: "~1.000/mes est.", name: "Producto de ejemplo · Deporte", hue: 190 },
 ];
 
-export const RankRow: React.FC<{ i: number; row: (typeof RANKING_ROWS)[number]; highlight?: number; style?: React.CSSProperties }> = ({
+export type CustomRankRow = { name: string; sub: string; thumb: React.ReactNode };
+
+export const RankRow: React.FC<{ i: number; row: (typeof RANKING_ROWS)[number]; highlight?: number; style?: React.CSSProperties; custom?: CustomRankRow }> = ({
   i,
   row,
   highlight = 0,
   style,
+  custom,
 }) => (
   <div
     style={{
@@ -270,14 +273,17 @@ export const RankRow: React.FC<{ i: number; row: (typeof RANKING_ROWS)[number]; 
     >
       {i + 1}
     </div>
+    {custom ? (
+      <div style={{ width: 56, height: 56, borderRadius: 10, overflow: "hidden", flexShrink: 0 }}>{custom.thumb}</div>
+    ) : null}
     <div
       style={{
+        display: custom ? "none" : "flex",
         width: 56,
         height: 56,
         borderRadius: 10,
         background: `linear-gradient(135deg, hsl(${row.hue} 30% 26%), hsl(${row.hue} 25% 16%))`,
         border: `1px solid ${UI.border2}`,
-        display: "flex",
         alignItems: "center",
         justifyContent: "center",
       }}
@@ -285,14 +291,22 @@ export const RankRow: React.FC<{ i: number; row: (typeof RANKING_ROWS)[number]; 
       <div style={{ width: 22, height: 26, borderRadius: 6, background: `hsl(${row.hue} 45% 62%)`, opacity: 0.85 }} />
     </div>
     <div style={{ flex: 1 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: UI.text }}>{row.name}</div>
-      <div style={{ fontSize: 11.5, color: UI.faint, marginTop: 4 }}>Amazon ES</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: UI.text }}>{custom ? custom.name : row.name}</div>
+      <div style={{ fontSize: 11.5, color: UI.faint, marginTop: 4 }}>{custom ? custom.sub : "Amazon ES"}</div>
     </div>
-    <div style={{ textAlign: "right", fontSize: 11.5, lineHeight: 1.5, color: UI.sub }}>
-      <div style={{ color: "#fff", fontWeight: 600, fontSize: 12.5 }}>{row.price}</div>
-      <div>{row.bsr}</div>
-      <div>{row.sales}</div>
-    </div>
+    {custom ? (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>
+        {[46, 34, 58].map((w, k) => (
+          <div key={k} style={{ width: w, height: 8, borderRadius: 4, background: "rgba(255,255,255,0.12)" }} />
+        ))}
+      </div>
+    ) : (
+      <div style={{ textAlign: "right", fontSize: 11.5, lineHeight: 1.5, color: UI.sub }}>
+        <div style={{ color: "#fff", fontWeight: 600, fontSize: 12.5 }}>{row.price}</div>
+        <div>{row.bsr}</div>
+        <div>{row.sales}</div>
+      </div>
+    )}
   </div>
 );
 
@@ -318,10 +332,11 @@ export const CountryTabs: React.FC<{ active?: number }> = ({ active = 0 }) => (
   </div>
 );
 
-export const RankingsContent: React.FC<{ rowsIn?: number[]; highlightRow?: number; highlight?: number }> = ({
+export const RankingsContent: React.FC<{ rowsIn?: number[]; highlightRow?: number; highlight?: number; custom?: CustomRankRow[] }> = ({
   rowsIn = [1, 1, 1, 1, 1, 1],
   highlightRow = -1,
   highlight = 0,
+  custom,
 }) => (
   <div>
     <UITitle size={40}>Más vendidos y mejores señales</UITitle>
@@ -338,6 +353,7 @@ export const RankingsContent: React.FC<{ rowsIn?: number[]; highlightRow?: numbe
           i={i}
           row={r}
           highlight={i === highlightRow ? highlight : 0}
+          custom={custom ? custom[i % custom.length] : undefined}
           style={{ opacity: rowsIn[i] ?? 1, translate: `${(1 - (rowsIn[i] ?? 1)) * 60}px 0` }}
         />
       ))}

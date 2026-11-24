@@ -2,20 +2,20 @@ import React from "react";
 import { AbsoluteFill } from "remotion";
 import { E, mix, p, spr, useTime } from "../../animations/clock";
 import { DarkBg, DemoTag, RiseText } from "../../components/primitives";
-import { Bottle, Earbuds } from "../../components/product/Products";
-import { AdCreative, ProductPhoto } from "../components44";
+import { AdCreative } from "../components44";
+import { CatFish, Chopper, DogBottle } from "../products44";
 import { C, INTER, SORA } from "../../styles/theme";
 import { V } from "../timeline44";
 
 const HOOKS = [
-  ["¿Aún limpias así?", "Mira la diferencia", "3 razones para tenerlo"],
-  ["Hidratación sin plástico", "Tu botella favorita", "Frío 24 h"],
-  ["El regalo perfecto", "Sonido sin cables", "Pruébalo hoy"],
+  ["Cebolla en dados, sin llorar", "Un golpe y listo", "Adiós a la tabla"],
+  ["Aprieta y bebe", "Agua en cada paseo", "Sin derrames"],
+  ["Tu gato no va a parar", "Se mueve solo", "Mira su reacción"],
 ];
 const STORES = [
-  { name: "Tienda A", y: 660, hue: 225, product: () => <ProductPhoto size={170} style={{ boxShadow: "none" }} /> },
-  { name: "Tienda B", y: 980, hue: 330, product: () => <Bottle height={190} angle={20} brand={1} shadow={false} /> },
-  { name: "Tienda C", y: 1300, hue: 150, product: () => <Earbuds size={180} lid={1} /> },
+  { name: "Tienda A", y: 660, hue: 150, product: (t: number) => <Chopper size={200} press={0.2 + Math.sin(t * 4) * 0.1} dice={1} /> },
+  { name: "Tienda B", y: 980, hue: 205, product: (t: number) => <DogBottle height={190} bowl={0.7} level={0.6} t={t} /> },
+  { name: "Tienda C", y: 1300, hue: 25, product: (t: number) => <CatFish size={196} wag={Math.sin(t * 9)} /> },
 ];
 
 const StoreWindow: React.FC<{ name: string; product: React.ReactNode; pulse: number }> = ({ name, product, pulse }) => (
@@ -74,11 +74,11 @@ export const A5Testing: React.FC = () => {
           return (
             <React.Fragment key={s.name}>
               <div style={{ position: "absolute", left: mix(-300, 340, k), top: s.y, translate: "-50% -50%", scale: 0.92, opacity: Math.min(1, k * 2), rotate: `${(1 - Math.min(1, k)) * -8}deg` }}>
-                <StoreWindow name={s.name} product={s.product()} pulse={prodPulse} />
+                <StoreWindow name={s.name} product={s.product(t)} pulse={prodPulse} />
               </div>
               {/* ad created from this store's product */}
               <div style={{ position: "absolute", left: mix(560, 850, a), top: s.y, translate: "-50% -50%", scale: mix(0.3, 1, a), opacity: Math.min(1, a * 2), zIndex: 2 }}>
-                <AdCreative width={170} hook={HOOKS[i][hookIdx]} hue={hue} product={<div style={{ scale: 0.55 }}>{s.product()}</div>} highlight={t > V.pHooks && t < V.pHooks + 0.15 ? 1 : 0} platform={`V${((creativeShift + i) % 3) + 1}`} />
+                <AdCreative width={170} hook={HOOKS[i][hookIdx]} hue={hue} product={<div style={{ scale: 0.6, background: "rgba(255,255,255,0.92)", borderRadius: 20 }}>{s.product(t)}</div>} highlight={t > V.pHooks && t < V.pHooks + 0.15 ? 1 : 0} platform={`V${((creativeShift + i) % 3) + 1}`} />
                 {/* activity bars */}
                 <div style={{ position: "absolute", right: -48, bottom: 30, display: "flex", gap: 5, alignItems: "flex-end", opacity: a }}>
                   {[0, 1, 2].map((b) => (

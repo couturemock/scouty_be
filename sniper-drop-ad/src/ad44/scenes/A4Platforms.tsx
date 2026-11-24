@@ -3,8 +3,8 @@ import { AbsoluteFill } from "remotion";
 import { E, mix, p, spr, useTime } from "../../animations/clock";
 import { DarkBg, DemoTag, LogoIcon, RiseText } from "../../components/primitives";
 import { IGlobe } from "../../components/Icons";
-import { RANKING_ROWS } from "../../components/ui/DropSniperUI";
-import { Platform, PlatformTile, ProductPhoto, TrendChart } from "../components44";
+import { Platform, PlatformTile, TrendChart } from "../components44";
+import { PRODUCT_CATEGORY, PRODUCT_NAMES, ProductKind, ProductTile44 } from "../products44";
 import { C, INTER } from "../../styles/theme";
 import { V } from "../timeline44";
 
@@ -24,19 +24,18 @@ const qpt = (s: { x: number; y: number }, k: number) => {
   return { x: (1 - k) ** 2 * s.x + 2 * (1 - k) * k * c.x + k * k * CX, y: (1 - k) ** 2 * s.y + 2 * (1 - k) * k * c.y + k * k * CY };
 };
 
-const MiniRow: React.FC<{ i: number; hl: number }> = ({ i, hl }) => {
-  const r = RANKING_ROWS[i];
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", borderRadius: 16, background: hl ? `rgba(76,104,255,${0.18 * hl})` : "rgba(255,255,255,0.03)", border: `1.5px solid rgba(110,140,255,${0.1 + 0.7 * hl})`, boxShadow: hl ? `0 0 ${36 * hl}px rgba(91,123,255,0.45)` : undefined, fontFamily: INTER, scale: 1 + hl * 0.04 }}>
-      {i === 1 ? <ProductPhoto size={58} style={{ boxShadow: "none" }} /> : <div style={{ width: 58, height: 58, borderRadius: 12, background: `linear-gradient(135deg, hsl(${r.hue} 30% 28%), hsl(${r.hue} 25% 16%))` }} />}
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 24, fontWeight: 600, color: "#fff" }}>{i === 1 ? "Aspiradora de mano 30kPa" : "Producto de ejemplo"}</div>
-        <div style={{ fontSize: 19, color: C.muted, marginTop: 3 }}>{i === 1 ? "19,90 € · BSR #12 · ~3.000/mes est." : `${r.price} · ${r.bsr}`}</div>
-      </div>
-      {hl > 0.5 ? <div style={{ fontSize: 19, fontWeight: 700, color: "#9FB3FF", border: "1.5px solid rgba(110,140,255,0.6)", borderRadius: 99, padding: "6px 12px", whiteSpace: "nowrap" }}>↗ Tracción</div> : null}
+const ROW_KINDS: (ProductKind | null)[] = ["chopper", "catfish", "dogbottle", null];
+
+const MiniRow: React.FC<{ kind: ProductKind | null; hl: number; t: number }> = ({ kind, hl, t }) => (
+  <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 18px", borderRadius: 16, background: hl ? `rgba(76,104,255,${0.18 * hl})` : "rgba(255,255,255,0.03)", border: `1.5px solid rgba(110,140,255,${0.1 + 0.7 * hl})`, boxShadow: hl ? `0 0 ${36 * hl}px rgba(91,123,255,0.45)` : undefined, fontFamily: INTER, scale: 1 + hl * 0.04 }}>
+    {kind ? <ProductTile44 kind={kind} size={64} t={t} /> : <div style={{ width: 64, height: 64, borderRadius: 12, background: "linear-gradient(135deg, hsl(260 30% 28%), hsl(260 25% 16%))" }} />}
+    <div style={{ flex: 1 }}>
+      <div style={{ fontSize: 24, fontWeight: 600, color: "#fff" }}>{kind ? PRODUCT_NAMES[kind] : "Producto de ejemplo"}</div>
+      <div style={{ fontSize: 19, color: C.muted, marginTop: 3 }}>{kind ? PRODUCT_CATEGORY[kind] : "Hogar"}</div>
     </div>
-  );
-};
+    {hl > 0.5 ? <div style={{ fontSize: 19, fontWeight: 700, color: "#9FB3FF", border: "1.5px solid rgba(110,140,255,0.6)", borderRadius: 99, padding: "6px 12px", whiteSpace: "nowrap" }}>↗ Tracción</div> : null}
+  </div>
+);
 
 export const A4Platforms: React.FC = () => {
   const t = useTime();
@@ -132,11 +131,11 @@ export const A4Platforms: React.FC = () => {
           <TrendChart width={810} height={200} progress={chart} title="Demanda del mercado" style={{ background: "rgba(255,255,255,0.02)" }} />
           {[0, 1, 2, 3].map((r, j) => (
             <div key={r} style={{ opacity: rowsIn[j], translate: `${(1 - rowsIn[j]) * 40}px 0` }}>
-              <MiniRow i={[2, 1, 4, 0][j]} hl={j === 1 ? hl : 0} />
+              <MiniRow kind={ROW_KINDS[j]} hl={j === 1 ? hl : 0} t={t} />
             </div>
           ))}
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <DemoTag label="Productos de ejemplo · datos ilustrativos" style={{ fontSize: 15 }} />
+            <DemoTag label="Recreación · datos ilustrativos" style={{ fontSize: 15 }} />
           </div>
         </div>
       </div>
