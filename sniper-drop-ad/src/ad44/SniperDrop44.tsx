@@ -3,7 +3,7 @@ import { AbsoluteFill, Sequence, staticFile } from "remotion";
 import { Audio } from "@remotion/media";
 import { SceneClock } from "../animations/clock";
 import { C } from "../styles/theme";
-import { FPS, HAS_AUDIO, SCENES44, Scene44 } from "./timeline44";
+import { AUDIO_FILE, FPS, HAS_AUDIO, SCENES44, Scene44, toDesign44, toReal44 } from "./timeline44";
 import { A1Map } from "./scenes/A1Map";
 import { A2Laptop } from "./scenes/A2Laptop";
 import { A3Modules } from "./scenes/A3Modules";
@@ -40,17 +40,18 @@ const f = (s: number) => Math.round(s * FPS);
 export const SniperDrop44: React.FC = () => (
   <AbsoluteFill style={{ background: C.ink }}>
     {(Object.keys(SCENES44) as Scene44[]).map((k) => {
-      const [a, b] = SCENES44[k];
+      const a = toReal44(SCENES44[k][0]);
+      const b = toReal44(SCENES44[k][1]);
       const Comp = SCENES44_COMPONENTS[k];
       return (
-        <Sequence key={k} name={SCENES44_TITLES[k]} from={f(a)} durationInFrames={f(b) - f(a)} premountFor={30}>
-          <SceneClock start={f(a) / FPS}>
+        <Sequence key={k} name={SCENES44_TITLES[k]} from={f(a)} durationInFrames={f(b) - f(a) + 1} premountFor={30}>
+          <SceneClock start={f(a) / FPS} map={toDesign44}>
             <Comp />
           </SceneClock>
         </Sequence>
       );
     })}
-    {HAS_AUDIO ? <Audio src={staticFile("audio/narracion-44.m4a")} /> : null}
+    {HAS_AUDIO ? <Audio src={staticFile(AUDIO_FILE)} /> : null}
   </AbsoluteFill>
 );
 
@@ -58,9 +59,10 @@ export const Scene44Preview: React.FC<{ scene: Scene44 }> = ({ scene }) => {
   const Comp = SCENES44_COMPONENTS[scene];
   return (
     <AbsoluteFill style={{ background: C.ink }}>
-      <SceneClock start={f(SCENES44[scene][0]) / FPS}>
+      <SceneClock start={f(toReal44(SCENES44[scene][0])) / FPS} map={toDesign44}>
         <Comp />
       </SceneClock>
+      <Audio src={staticFile(AUDIO_FILE)} trimBefore={f(toReal44(SCENES44[scene][0]))} />
     </AbsoluteFill>
   );
 };

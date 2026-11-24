@@ -5,13 +5,20 @@
  * script at the narrator's measured pace in the previous voice-over
  * (~7 syllables/s, 0.2–0.55 s pauses on punctuation), scaled to 44 s.
  *
- * When the real audio arrives: put it in public/audio/narracion-44.m4a,
- * set HAS_AUDIO = true and replace these values with the measured ones.
+ * AUDIO: at the client's request the piece uses public/audio/narracion-49.mp3
+ * (49.476 s; its words belong to a different script). The 44 s design
+ * timeline is stretched uniformly (STRETCH) so the visuals end with the voice.
+ * To use a matching narration later, change AUDIO_FILE / AUDIO_DURATION.
  */
-export const HAS_AUDIO = false;
+export const HAS_AUDIO = true;
+export const AUDIO_FILE = "audio/narracion-49.mp3";
+export const AUDIO_DURATION = 49.476;
 export const FPS = 30;
-export const DURATION = 44;
-export const TOTAL_FRAMES = DURATION * FPS; // 1320
+export const DURATION = 44; // design time base of the scenes below
+export const STRETCH = AUDIO_DURATION / DURATION; // 1.1245
+export const TOTAL_FRAMES = Math.ceil(AUDIO_DURATION * FPS); // 1485
+export const toReal44 = (t: number) => t * STRETCH;
+export const toDesign44 = (t: number) => t / STRETCH;
 
 export const V = {
   // S1 "Si te dedicas al dropshipping o al e-commerce, tienes que conocer el mapa del tesoro."
